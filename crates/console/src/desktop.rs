@@ -24,6 +24,7 @@ pub(super) enum Source {
 
 pub(super) struct Desktop {
     frame: Option<(ObjectUrl, Source, Option<u64>)>,
+    preview: NodeRef,
     status: &'static str,
     saved_status: &'static str,
     missed: u8,
@@ -47,6 +48,8 @@ pub(super) enum Action {
     VisibleChanged,
     Received(u64, Source, Frame),
     ImageError,
+    Enlarge,
+    ClosePreview,
 }
 
 async fn request_frame(id: &str, token: &str, source: Source, signal: &AbortSignal) -> Frame {
@@ -126,6 +129,7 @@ impl Component for Desktop {
             .send_message(Action::Poll(Self::first(ctx.props())));
         Self {
             frame: None,
+            preview: NodeRef::default(),
             status: if ctx.props().running {
                 "正在连接实时桌面…"
             } else {
@@ -143,6 +147,18 @@ impl Component for Desktop {
 
     fn update(&mut self, ctx: &Context<Self>, action: Action) -> bool {
         match action {
+            Action::Enlarge => {
+                if let Some(dialog) = self.preview.cast::<web_sys::HtmlDialogElement>() {
+                    let _ = dialog.show_modal();
+                }
+                false
+            }
+            Action::ClosePreview => {
+                if let Some(dialog) = self.preview.cast::<web_sys::HtmlDialogElement>() {
+                    dialog.close();
+                }
+                false
+            }
             Action::Poll(source) => {
                 if document_hidden() || self.request.is_some() {
                     return false;
@@ -260,7 +276,17 @@ impl Component for Desktop {
         html! {
             <section class="panel desktop-panel" aria-label="生物桌面">
                 <header class="panel-heading"><h2>{"只读桌面"}</h2>
-                    <span role="status" class={classes!("desktop-status", (self.status=="实时").then_some("live"))}>{self.status}</span>
+                    <div class="desktop-tools">
+                        <span role="status" class={classes!("desktop-status", (self.status=="实时").then_some("live"))}>{self.status}</span>
+                        <button type="button" class="text-link desktop-chat-shortcut" onclick={Callback::from(|_| {
+                            if let Some(input) = web_sys::window().and_then(|w| w.document())
+                                .and_then(|d| d.get_element_by_id("organism-chat-composer"))
+                                .and_then(|el| el.dyn_into::<HtmlTextAreaElement>().ok())
+                            {
+                                let _ = input.focus();
+                            }
+                        })}>{"写消息"}{icon("arrow")}</button>
+                    </div>
                 </header>
                 {if let Some((frame, source, time)) = &self.frame {
                     let caption = match source {
@@ -268,8 +294,24 @@ impl Component for Desktop {
                         Source::Live => "上次实时画面",
                         Source::Snapshot => "已保存的桌面快照",
                     };
-                    html! {<><div class="desktop-screen"><img alt={caption} src={frame.to_string()} draggable="false" onerror={ctx.link().callback(|_|Action::ImageError)} /></div>
-                        <div class="desktop-updated">{format!("{caption}{}", time.map(|v|format!(" · {}",date(v))).unwrap_or_default())}</div></>}
+                    let url = frame.to_string();
+                    html! {<>
+                        <button type="button" class="desktop-screen" aria-label="放大桌面" aria-haspopup="dialog"
+                            onclick={ctx.link().callback(|_|Action::Enlarge)}>
+                            <img alt={caption} src={url.clone()} draggable="false" onerror={ctx.link().callback(|_|Action::ImageError)} />
+                            <span class="desktop-expand">{icon("expand")}{"放大"}</span>
+                        </button>
+                        <div class="desktop-updated">{format!("{caption}{}", time.map(|v|format!(" · {}",date(v))).unwrap_or_default())}</div>
+                        <dialog ref={self.preview.clone()} class="desktop-preview" aria-label="桌面大图"
+                            onclick={ctx.link().batch_callback(|e:MouseEvent|
+                                (e.target() == e.current_target()).then_some(Action::ClosePreview))}>
+                            <div class="desktop-preview-body">
+                                <header><h2>{"只读桌面"}</h2><button class="icon-button" aria-label="关闭大图" type="button"
+                                    onclick={ctx.link().callback(|_|Action::ClosePreview)}>{icon("close")}</button></header>
+                                <img alt={caption} src={url} draggable="false" />
+                            </div>
+                        </dialog>
+                    </>}
                 } else if !fallback {
                     html! {<div class="desktop-placeholder">{"正在等待第一帧桌面画面…"}</div>}
                 } else {Html::default()}}

@@ -34,6 +34,7 @@ struct App {
     refresh_request: u64,
     token: Option<String>,
     token_input: String,
+    dialogue_drafts: dialogue::Drafts,
     snapshot: Value,
     topology: Value,
     page: Page,
@@ -283,6 +284,7 @@ fn icon(name: &str) -> Html {
         "file" => "M14 2H6v20h12V6l-4-4Zm0 0v6h4M8 12h8m-8 4h8",
         "clock" => "M12 8v5l3 2M22 12a10 10 0 1 1-20 0 10 10 0 0 1 20 0Z",
         "external" => "M14 3h7v7m0-7L10 14m1-11H3v18h18v-8",
+        "expand" => "M8 3H3v5m13-5h5v5M3 16v5h5m13-5v5h-5",
         "lock" => "M6 10V7a6 6 0 0 1 12 0v3M4 10h16v12H4zM12 14v4",
         "menu" => "M4 6h16M4 12h16M4 18h16",
         _ => "M12 5v14M5 12h14",
@@ -304,6 +306,7 @@ impl Component for App {
             refresh_request: 0,
             token: None,
             token_input: String::new(),
+            dialogue_drafts: Default::default(),
             snapshot: snapshot.clone(),
             topology: if demo {
                 demo::topology(&snapshot)
@@ -361,6 +364,7 @@ impl Component for App {
                     self.error = "请输入创建者访问凭据。".into()
                 } else {
                     self.epoch += 1;
+                    self.dialogue_drafts = Default::default();
                     self.token = Some(self.token_input.trim().into());
                     self.token_input.clear();
                     self.error.clear();
@@ -373,6 +377,7 @@ impl Component for App {
                 self.epoch += 1;
                 self.detail_request += 1;
                 self.token = None;
+                self.dialogue_drafts = Default::default();
                 self.snapshot = Value::Null;
                 self.topology = Value::Null;
                 self.detail = Value::Null;
@@ -775,6 +780,7 @@ impl App {
             self.epoch += 1;
             self.detail_request += 1;
             self.token = None;
+            self.dialogue_drafts = Default::default();
             self.snapshot = Value::Null;
             self.topology = Value::Null;
             self.detail = Value::Null;
