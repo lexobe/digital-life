@@ -1,0 +1,15 @@
+# Set SURVIVE_PUBLIC_DOMAIN and SURVIVE_UPSTREAM in the proxy's private environment.
+# The domain's DNS record must point to the deployment before certificate issuance.
+https://{$SURVIVE_PUBLIC_DOMAIN} {
+    tls {
+        issuer acme {
+            dir https://acme-v02.api.letsencrypt.org/directory
+        }
+    }
+    encode zstd gzip
+    reverse_proxy {$SURVIVE_UPSTREAM:127.0.0.1:8088}
+}
+
+http://{$SURVIVE_PUBLIC_DOMAIN} {
+    redir https://{$SURVIVE_PUBLIC_DOMAIN}{uri} 308
+}

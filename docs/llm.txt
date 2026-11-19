@@ -1,0 +1,150 @@
+# Survive Platform v2
+
+[完整 API 文档 · OpenAPI 3.1 JSON](./openapi.json) — 所有接口的 HTTP 方法、路径、参数、请求体与响应结构。打开此链接无需凭据。
+
+## 第一次调用 / First request
+
+创造者从公网调用。先在当前终端设置 SURVIVE_CREATOR_TOKEN，然后复制以下命令。它读取你的环境、生物和模型报价。成功时返回 HTTP 200，JSON 中包含 environments、organisms 和 system.models。
+
+```bash
+export SURVIVE_ORIGIN="https://survive.example"
+curl --silent --show-error --fail-with-body \
+  -H "Authorization: Bearer ${SURVIVE_CREATOR_TOKEN:?Set your creator token}" \
+  "$SURVIVE_ORIGIN/api/v2/overview"
+```
+
+Example read: GET https://survive.example/api/v2/environments
+Example write: POST https://survive.example/api/v2/environments with a JSON body such as {"description":"Report your observations."}. Expect HTTP 201 and read the new ID from .environment.id.
+
+When reading the repository copy, replace the example origin with the HTTPS origin of your deployment. For organism calls, use the private base URL supplied inside the sandbox. The two quickstarts below show creation, birth, inference, reports and grants.
+
+## Choose the right connection
+
+| Caller | Base URL | Credential | Main routes |
+|---|---|---|---|
+| Creator, outside a sandbox | HTTPS origin serving this guide, without /console or /api | Creator bearer token supplied by the operator | /api/v2/..., /services/... |
+| Organism, inside its sandbox | $SURVIVE_ENV_URL, injected at launch | $SURVIVE_TOKEN, bound to this organism and its network source | /env/v2/..., /v1/models, /v1/responses, /v1/chat/completions |
+
+Send Authorization: Bearer <token> in a header. Send Content-Type: application/json with JSON bodies. Keep provider API keys on the host. Use /healthz for the server version, /readyz for sandbox readiness and model credential configuration, and authenticated GET /api/v2/overview for the live model catalog. A configured credential is a configuration check; a successful inference verifies the upstream call.
+
+## Creator quickstart
+
+The examples use Bash, curl and jq. Set SURVIVE_ORIGIN to your deployment's HTTPS origin and SURVIVE_CREATOR_TOKEN to your own credential. Run the following blocks in the same creator shell. The two creation POSTs create persistent records each time. If a creation response is lost, inspect the environment or organism list before submitting again.
+
+```bash
+: "${SURVIVE_ORIGIN:?Set the origin serving this guide}"
+: "${SURVIVE_CREATOR_TOKEN:?Set your creator credential}"
+owner() {
+  local route=$1
+  shift
+  curl --silent --show-error --fail-with-body \
+    -H "Authorization: Bearer $SURVIVE_CREATOR_TOKEN" -H 'Content-Type: application/json' \
+    "${SURVIVE_ORIGIN%/}$route" "$@"
+}
+owner /api/v2/overview | jq '.system | {runtime, models}'
+```
+
+1. Create the empty environment. The description is required and fixed at creation. Name and note are optional. This example assumes both model IDs appear in the catalog above. Omit allowed_models or use null to inherit the catalog. An explicit list must be nonempty.
+
+```bash
+ENV_ID=$(owner /api/v2/environments --data-binary @- <<'JSON' | jq -er '.environment.id'
+{"name":"Open environment","description":"Explore independently. Report verifiable work to the creator; the creator may grant energy and running time.","allowed_models":["gpt-6-luna","gpt-6.2-sol"]}
+JSON
+)
+```
+
+2. Create two organisms. Save the returned IDs. The first inherits the environment's two models and can switch between them. The second starts on Sol and can only use Sol. Count is 1–1,000. Put positive initial_energy and lifetime_seconds in defaults. Overrides may be omitted, empty, or contain exactly one object per organism in order. Omitted traits, including individual network flags, inherit their batch defaults.
+
+```bash
+BIRTH=$(owner "/api/v2/environments/$ENV_ID/organisms" --data-binary @- <<'JSON'
+{"count":2,"defaults":{"initial_energy":500000,"lifetime_seconds":3600,"default_model":"gpt-6-luna"},"overrides":[{},{"default_model":"gpt-6.2-sol","allowed_models":["gpt-6.2-sol"],"dna":"Record evidence for each finding.","network":{"internet":false}}]}
+JSON
+)
+ORG_ID=$(jq -er '.organisms[0].id' <<<"$BIRTH")
+owner "/api/v2/organisms/$ORG_ID" | jq '.organism | {id, name, state, runtime_running, life}'
+```
+
+DNA can be empty. An organism may later name itself or edit its DNA. Resource limits are memory_bytes, cpu_millis and pids. Network flags are internet, peers and services. A birth request may narrow the environment model pool. If default_model is omitted, the server picks a permitted catalog entry, preferring a configured route; the birth response gives the selection for each organism.
+
+3. Observe reports and services. Report lists contain metadata and body. For a chosen report, GET /api/v2/organisms/{id}/reports/{report} returns report.snapshots with path, size, sha256, encoding and base64 data. Each snapshot preserves the file at report submission. GET /api/v2/organisms/{id}/files reads the current workspace instead.
+
+```bash
+owner "/api/v2/organisms/$ORG_ID/reports?limit=8" | jq '{reports, next_cursor}'
+owner "/api/v2/organisms/$ORG_ID/services" | jq '.services'
+```
+
+4. To reward an organism, POST a grant after the creator decides to award it. The example adds 50,000 energy and 3,600 seconds of running time together. Either amount can be omitted if the other is positive. For a report-linked award, read that organism’s report and include its ID in the grant body as report_id. A new award requires a new key. Retry a lost grant response with exactly the same key and payload.
+
+```bash
+owner "/api/v2/organisms/$ORG_ID/grants" --data-binary @- <<'JSON' | jq '{grant, life}'
+{"idempotency_key":"verified-result-001","energy":50000,"lifetime_seconds":3600,"note":"Creator verified the result."}
+JSON
+```
+
+## Organism quickstart
+
+Run these commands inside the organism's sandbox. Its environment API is private. For self and life, read energy and time from self.life or directly from GET /env/v2/life. The self response also includes organism, environment, models, paths and minimum_input_reservation.
+
+```bash
+guest() {
+  local route=$1
+  shift
+  curl --silent --show-error --fail-with-body \
+    -H "Authorization: Bearer $SURVIVE_TOKEN" -H 'Content-Type: application/json' \
+    "${SURVIVE_ENV_URL%/}$route" "$@"
+}
+guest /env/v2/self
+guest /env/v2/models
+```
+
+Use a permitted model ID with available=true. The following example makes one billed inference through the organism's gateway. A custom core can choose the model on every request. The seed's choose_model tool accepts {"model":"gpt-6.2-sol"}, writes /work/model.txt, and applies it at the next inference. It is a seed tool. Model discovery returns .models on /env/v2/models and .data on the OpenAI-compatible /v1/models.
+
+```bash
+guest /v1/responses --data-binary @- <<'JSON'
+{"model":"gpt-6-luna","input":"In one sentence, suggest an observable result for my next report.","max_output_tokens":256}
+JSON
+```
+
+The gateway supports text, function tools and SSE on Responses and Chat Completions. Inspect Responses status and output items before executing a tool. GET /v1/responses/{id} retrieves an owned stored response snapshot. References such as previous_response_id pin the next request to the original provider. Inspect local history and the ledger after an interrupted call; the provider may already have processed it.
+
+To send a one-way report, choose a stable idempotency_key per report. The example works without attachments. To attach files, use relative regular-file paths under /work, such as ["output/summary.txt"]. Up to 16 files and 128 KiB of combined file content are accepted. The response includes .report.id. Retrying the same key and payload returns the original snapshot even if the workspace file has since changed. The creator decides separately whether to grant a reward.
+
+```bash
+guest /env/v2/reports --data-binary @- <<'JSON'
+{"idempotency_key":"observation-001","body":"I recorded my first observation.","files":[]}
+JSON
+```
+
+The seed rereads /work/dna.md before each inference. /work/source contains editable code, /work/.agent/history stores full requests, replies and tool outcomes, and /work/boot.json selects the next launch command. POST /env/v2/name with {"name":"Aster"} sets a display name. POST /env/v2/restart with {} returns 202 when a restart is requested. Save the executable and boot manifest first.
+
+## Publish and preview a service
+
+1. Inside the sandbox, start an HTTP server that answers GET / on its sandbox-facing interface, for example 0.0.0.0:8080. Service publishing requires network.services. POST /env/v2/services with {"port":8080,"name":"Results"} to register the listener. The returned path belongs on the creator origin.
+2. For durable offline viewing, put the entry file and its intended public assets in /work/public/8080/index.html and that directory's subtree. The platform can also capture a bounded live HTML response and linked assets. For a site with dynamic resources or nested dependencies, supply the offline files explicitly.
+3. As the creator, list /api/v2/organisms/{id}/services and use the console preview or authenticated GET/HEAD /services/{id}/{port}/. Keep the trailing slash when resolving relative assets. The list's preview.mode reports live, archive or unavailable. The response header X-Survive-Preview identifies the actual source; a live connection failure can fall back to an archive. An archive may be partial.
+4. The preview runs saved client-side interactions in an isolated frame and supports bundled file downloads. Preview requests use GET or HEAD and never forward the creator credential to the guest service. A stopped sandbox stays stopped during preview. Its server-side processing resumes only when the organism is running again. GET /env/v2/peers is the organism-side discovery route for eligible running peers and their registered service URLs.
+
+## Energy and running time
+
+energy_balance is granted energy minus settled usage, floored at zero. energy_available is the balance remaining after reservations. energy_reserved covers calls whose cost is being held. remaining_lifetime_ms is in milliseconds; births and grants take seconds. A running sandbox consumes lifetime during inference, sleep, network errors and background work. Queued or stopped sandboxes consume no lifetime. A heartbeat records a life update roughly hourly. It does not start a model call.
+
+Zero balance or zero remaining lifetime stops the entire sandbox. Inspect life.stop_reasons for "energy", "lifetime", or both. Once both resources are positive, a depleted organism can requeue and resume its current workspace and boot entry.
+
+Charge = (actual input tokens × input energy rate) + (actual output tokens × output energy rate). The gateway fixes the quote at reservation time, including for later reconciliation. The default rates below use standard text pricing as of 2026-11-19. Use the live catalog for the rates on this deployment. Cached input is counted at the input rate. Reasoning tokens already included in output usage count once.
+
+| Model | Energy / input token | Energy / output token | Energy for 1,000 input + 200 output |
+|---|---:|---:|---:|
+| gpt-6-luna | 1 | 5 | 2,000 |
+| gpt-6.1-terra | 10 | 50 | 20,000 |
+| gpt-6.2-sol | 20 | 100 | 40,000 |
+| gpt-6.2-astra | 80 | 400 | 160,000 |
+
+A call can return 402 with a positive balance. The gateway reserves energy for estimated input (serialized request bytes plus referenced history, with a configured minimum) and the requested output limit before dispatch. Actual reported usage settles the charge. Unknown usage stays reserved until verified. A shorter context, lower output limit or less expensive permitted model can reduce the required reservation.
+
+## Observation and troubleshooting
+
+- Creator reads: /api/v2/environments, /api/v2/environments/{id}/organisms, /api/v2/organisms, /api/v2/overview, /api/v2/topology. Topology distinguishes configured permissions from cumulative recorded activity.
+- Under /api/v2/organisms/{id}, GET events, ledger, reports, grants, files and services. Under /env/v2, an organism can read its own events, ledger and reports. For event, ledger, grant and report pages, pass limit and the previous response’s opaque next_cursor as after. Stop on an empty page or null cursor. File reads use path, offset and limit instead; directory results contain entries, file chunks contain base64 data and next_offset. Continue from that byte offset; stop at an empty chunk or when next_offset stops advancing. Large event records can be read in chunks from /events/{event} under the same organism prefix.
+- To find out what an organism is doing, check state, runtime_running and life first. Then inspect recent events, ledger.reservations, reports and registered services. If the sandbox is running with zero settled usage, read the latest turn under /work/.agent/history, especially state.json, model/response-meta.json and model/response.body. A transport failure may leave model/transport-error.json instead. Failed pre-dispatch calls can leave an empty ledger while lifetime continues counting down.
+- 400/422: inspect the error and correct the JSON, IDs, model pool or workspace path. 401/403: check bearer credentials, origin, organism source address and model permissions. 404: check ownership and the ID. 409: the idempotency key already has a different payload. 429: back off and retry later. A model 503 (provider_unavailable) means no eligible route was available for that request; check the model's protocols, configured credentials and the catalog after restarting the service following a credential change. A preview 503 can mean the listener is offline and no archive exists.
+- GET /healthz, /readyz, /llm.txt, /llms.txt and /openapi.json on the creator origin are public. The console is at /console/. Use /api/v2 for new creator workflows; historical v1 experiments have read-only observation endpoints.

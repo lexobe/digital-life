@@ -1,0 +1,7 @@
+--- a/crates/youki/src/commands/features.rs
++++ b/crates/youki/src/commands/features.rs
+@@ -103 +103,3 @@
+-    let pretty_json_str = serde_json::to_string_pretty(&features)?;
++    let mut report = serde_json::to_value(features)?;
++    report["linux"]["seccomp"] = serde_json::json!({"enabled": cfg!(feature = "seccomp")});
++    let pretty_json_str = serde_json::to_string_pretty(&report)?;

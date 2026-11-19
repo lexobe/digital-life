@@ -1,0 +1,8 @@
+# Copy to /etc/survive-platform/environment and chmod 0600.
+# Loaded by survive-server before worker threads start. Never commit real values.
+# Literal KEY=value syntax; single/double quotes supported; no shell expansion.
+SURVIVE_CONFIG=/etc/survive-platform/config.toml
+SURVIVE_CREATOR_TOKEN=replace-with-at-least-32-random-characters
+SURVIVE_PRIMARY_API_KEY=
+SURVIVE_CLIPROXY_API_KEY=
+RUST_LOG=info

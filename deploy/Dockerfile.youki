@@ -1,0 +1,6 @@
+FROM survive-rootfs:0.1
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential libseccomp-dev libelf-dev zlib1g-dev clang llvm libclang-dev pkg-config \
+    && rm -rf /var/lib/apt/lists/*
+ENV CARGO_HOME=/cargo-cache
+WORKDIR /source

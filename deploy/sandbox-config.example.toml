@@ -1,0 +1,17 @@
+# These are all SandboxConfig fields. Parent may embed this table under [sandbox].
+# CLI accepts this standalone TOML, not the whole server config.
+data_dir = "/var/lib/survive"
+rootfs = "/var/lib/survive-rootfs"
+youki = "/opt/survive-platform/bin/youki"
+init_binary = "/opt/survive-platform/bin/survive-init"
+agent_binary = "/opt/survive-platform/bin/survive-agent"
+gateway_url = "http://10.203.0.1:8089"
+total_memory_bytes = 4294967296
+
+# Optional fields, with their defaults:
+cgroup_root = "/sys/fs/cgroup/survive"
+uid_base = 65536
+denied_cidrs = [] # ADD public control/admin/service addresses; RFC private ranges are always denied.
+dns_servers = ["1.1.1.1", "9.9.9.9"]
+command_timeout_secs = 30
+disk_bytes = 2147483648 # Hard per-agent /work + writable rootfs capacity; preallocated.

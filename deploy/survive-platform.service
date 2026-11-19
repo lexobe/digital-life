@@ -1,0 +1,21 @@
+[Unit]
+Description=Survive Platform autonomous-agent environment
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/survive-platform
+ExecStartPre=/opt/survive-platform/bin/start-pre
+ExecStart=/opt/survive-platform/bin/survive-server --config /etc/survive-platform/config.toml --env-file /etc/survive-platform/environment
+Restart=on-failure
+RestartSec=5
+MemoryMax=512M
+TasksMax=512
+CPUWeight=50
+LimitNOFILE=65536
+UMask=0077
+TimeoutStopSec=150
+
+[Install]
+WantedBy=multi-user.target

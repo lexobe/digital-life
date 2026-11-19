@@ -1,0 +1,3549 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Survive Platform",
+    "version": "0.2.0",
+    "description": "Digital life environments. Creator-owned environments, per-organism energy and running time, priced LLM inference, reports and grants. See /llm.txt for a complete example."
+  },
+  "servers": [
+    {
+      "url": "/",
+      "description": "Use the creator origin for /api routes and the sandbox environment origin for /env and /v1 model routes."
+    }
+  ],
+  "security": [
+    {
+      "bearerAuth": []
+    }
+  ],
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer"
+      }
+    },
+    "schemas": {
+      "ResourceLimits": {
+        "type": "object",
+        "properties": {
+          "memory_bytes": {
+            "type": "integer",
+            "minimum": 33554432,
+            "default": 268435456
+          },
+          "pids": {
+            "type": "integer",
+            "minimum": 8,
+            "default": 64,
+            "maximum": 16384
+          },
+          "cpu_millis": {
+            "type": "integer",
+            "minimum": 1,
+            "default": 500,
+            "maximum": 1000000
+          }
+        }
+      },
+      "NetworkPolicy": {
+        "type": "object",
+        "properties": {
+          "internet": {
+            "type": "boolean",
+            "default": true
+          },
+          "peers": {
+            "type": "boolean",
+            "default": true
+          },
+          "services": {
+            "type": "boolean",
+            "default": true
+          }
+        }
+      },
+      "RewardRule": {
+        "type": "object",
+        "required": [
+          "id",
+          "instructions",
+          "tokens"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]{1,64}$"
+          },
+          "instructions": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "noul",
+              "score"
+            ],
+            "default": "noul"
+          },
+          "threshold": {
+            "type": "number",
+            "default": 0.9
+          },
+          "min_confidence": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1,
+            "default": 0.9
+          },
+          "criteria": {},
+          "tokens": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "max_awards": {
+            "type": "integer",
+            "minimum": 1,
+            "default": 1
+          },
+          "source_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "occurrence_path": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "expires_after_secs": {
+            "type": "integer",
+            "minimum": 1,
+            "default": 86400
+          }
+        }
+      },
+      "EvidenceSource": {
+        "type": "object",
+        "required": [
+          "id",
+          "url"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string",
+            "description": "Creator-controlled HTTP(S) URL, or empty for authenticated events. Placeholders: {agent_id}, {occurrence_id}."
+          },
+          "headers": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "writeOnly": true
+          },
+          "event_secret_hash": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "writeOnly": true
+          }
+        }
+      },
+      "SubmissionInput": {
+        "type": "object",
+        "required": [
+          "rule_id",
+          "idempotency_key",
+          "description"
+        ],
+        "properties": {
+          "rule_id": {
+            "type": "string"
+          },
+          "idempotency_key": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 65536
+          },
+          "files": {
+            "type": "array",
+            "maxItems": 16,
+            "items": {
+              "type": "string"
+            }
+          },
+          "occurrence_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "ServiceRegistration": {
+        "type": "object",
+        "required": [
+          "port",
+          "name"
+        ],
+        "properties": {
+          "port": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 65535
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          }
+        }
+      },
+      "Error": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "object",
+            "properties": {
+              "message": {
+                "type": "string"
+              },
+              "status": {
+                "type": "integer"
+              }
+            }
+          }
+        }
+      },
+      "ExperimentInput": {
+        "type": "object",
+        "required": [
+          "name",
+          "goal",
+          "initial_prompt",
+          "initial_tokens",
+          "reward_budget",
+          "rules"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "goal": {
+            "type": "string",
+            "minLength": 1
+          },
+          "initial_prompt": {
+            "type": "string",
+            "minLength": 1,
+            "description": "At most 32768 JSON-encoded bytes, including escapes."
+          },
+          "count": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1000,
+            "default": 1
+          },
+          "initial_tokens": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "reward_budget": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "model": {
+            "type": "string",
+            "default": "default"
+          },
+          "rules": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RewardRule"
+            }
+          },
+          "evidence_sources": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EvidenceSource"
+            }
+          },
+          "limits": {
+            "$ref": "#/components/schemas/ResourceLimits"
+          },
+          "network": {
+            "$ref": "#/components/schemas/NetworkPolicy"
+          },
+          "individuals": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "prompt"
+              ],
+              "properties": {
+                "prompt": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      },
+      "BirthDefaults": {
+        "type": "object",
+        "properties": {
+          "initial_energy": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "lifetime_seconds": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "dna": {
+            "type": "string"
+          },
+          "default_model": {
+            "type": "string"
+          },
+          "allowed_models": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "limits": {
+            "$ref": "#/components/schemas/ResourceLimits"
+          },
+          "network": {
+            "$ref": "#/components/schemas/NetworkPolicy"
+          }
+        },
+        "required": [
+          "initial_energy",
+          "lifetime_seconds"
+        ]
+      },
+      "BirthOverride": {
+        "type": "object",
+        "properties": {
+          "initial_energy": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "lifetime_seconds": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "dna": {
+            "type": "string"
+          },
+          "default_model": {
+            "type": "string"
+          },
+          "allowed_models": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "limits": {
+            "$ref": "#/components/schemas/ResourceLimits"
+          },
+          "network": {
+            "$ref": "#/components/schemas/NetworkPolicy"
+          }
+        }
+      },
+      "EnvironmentInput": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "note": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string",
+            "minLength": 1
+          },
+          "allowed_models": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "minItems": 1,
+            "uniqueItems": true,
+            "items": {
+              "type": "string"
+            },
+            "description": "Optional immutable environment model pool. Omitted or null inherits the deployment catalog. Organism permissions can narrow this list."
+          }
+        },
+        "required": [
+          "description"
+        ]
+      },
+      "BirthBatch": {
+        "type": "object",
+        "properties": {
+          "count": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "defaults": {
+            "$ref": "#/components/schemas/BirthDefaults"
+          },
+          "overrides": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BirthOverride"
+            }
+          }
+        },
+        "required": [
+          "count",
+          "defaults"
+        ]
+      },
+      "GrantInput": {
+        "type": "object",
+        "properties": {
+          "idempotency_key": {
+            "type": "string",
+            "minLength": 1
+          },
+          "energy": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "lifetime_seconds": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "note": {
+            "type": "string"
+          },
+          "report_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "idempotency_key"
+        ]
+      },
+      "ReportInput": {
+        "type": "object",
+        "properties": {
+          "body": {
+            "type": "string",
+            "minLength": 1
+          },
+          "idempotency_key": {
+            "type": "string",
+            "minLength": 1
+          },
+          "files": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "body",
+          "idempotency_key"
+        ]
+      },
+      "LifeEnvironment": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "owner": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "note": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "allowed_models": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "minItems": 1,
+            "uniqueItems": true,
+            "items": {
+              "type": "string"
+            },
+            "description": "Optional immutable environment model pool. Omitted or null inherits the deployment catalog. Organism permissions can narrow this list."
+          }
+        },
+        "required": [
+          "id",
+          "owner",
+          "description",
+          "name",
+          "note",
+          "created_at"
+        ]
+      },
+      "LifeState": {
+        "type": "object",
+        "properties": {
+          "energy_balance": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "energy_available": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "energy_reserved": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "remaining_lifetime_ms": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "last_heartbeat_at": {
+            "type": [
+              "null",
+              "integer"
+            ]
+          },
+          "stop_reasons": {
+            "type": "array",
+            "items": {
+              "enum": [
+                "energy",
+                "lifetime"
+              ]
+            }
+          }
+        },
+        "required": [
+          "energy_balance",
+          "energy_available",
+          "energy_reserved",
+          "remaining_lifetime_ms",
+          "last_heartbeat_at",
+          "stop_reasons"
+        ]
+      },
+      "PriceQuote": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "input": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "output": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "available": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "input",
+          "output",
+          "available"
+        ]
+      },
+      "Organism": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/BirthDefaults"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "environment_id": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "owner": {
+                "type": "string"
+              },
+              "state": {
+                "type": "string"
+              },
+              "generation": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "runtime_running": {
+                "type": "boolean"
+              },
+              "life": {
+                "$ref": "#/components/schemas/LifeState"
+              },
+              "granted": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "used": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "id",
+              "environment_id",
+              "name",
+              "owner",
+              "state",
+              "generation",
+              "runtime_running",
+              "life",
+              "granted",
+              "used"
+            ]
+          }
+        ]
+      },
+      "Snapshot": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "size": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "sha256": {
+            "type": "string"
+          },
+          "encoding": {
+            "const": "base64"
+          },
+          "data": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "size",
+          "sha256",
+          "encoding",
+          "data"
+        ]
+      },
+      "Report": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/ReportInput"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "organism_id": {
+                "type": "string"
+              },
+              "created_at": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "id",
+              "organism_id",
+              "created_at"
+            ]
+          }
+        ]
+      },
+      "Grant": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/GrantInput"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "organism_id": {
+                "type": "string"
+              },
+              "owner": {
+                "type": "string"
+              },
+              "created_at": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "id",
+              "organism_id",
+              "owner",
+              "created_at"
+            ]
+          }
+        ]
+      },
+      "ServicePreview": {
+        "type": "object",
+        "properties": {
+          "mode": {
+            "type": "string",
+            "enum": [
+              "live",
+              "archive",
+              "unavailable"
+            ]
+          },
+          "entry": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "detail": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "mode",
+          "entry"
+        ]
+      }
+    }
+  },
+  "paths": {
+    "/api/v1/experiments": {
+      "get": {
+        "summary": "List owned experiments",
+        "operationId": "get__api_v1_experiments",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "deprecated": true
+      }
+    },
+    "/api/v1/experiments/{id}": {
+      "get": {
+        "summary": "Get owned experiment",
+        "operationId": "get__api_v1_experiments_id",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "deprecated": true
+      }
+    },
+    "/api/v1/experiments/{id}/agents": {
+      "get": {
+        "summary": "List experiment individuals",
+        "operationId": "get__api_v1_experiments_id_agents",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "deprecated": true
+      }
+    },
+    "/api/v1/agents/{id}": {
+      "get": {
+        "summary": "Get individual status",
+        "operationId": "get__api_v1_agents_id",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "deprecated": true
+      }
+    },
+    "/api/v1/agents/{id}/ledger": {
+      "get": {
+        "summary": "Get token accounting",
+        "operationId": "get__api_v1_agents_id_ledger",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "after",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        ],
+        "deprecated": true
+      }
+    },
+    "/api/v1/agents/{id}/submissions": {
+      "get": {
+        "summary": "List submissions",
+        "operationId": "get__api_v1_agents_id_submissions",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "after",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        ],
+        "deprecated": true
+      }
+    },
+    "/api/v1/agents/{id}/services": {
+      "get": {
+        "summary": "List registered services",
+        "operationId": "get__api_v1_agents_id_services",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "deprecated": true
+      }
+    },
+    "/api/v1/agents/{id}/events": {
+      "get": {
+        "summary": "Page durable events",
+        "operationId": "get__api_v1_agents_id_events",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "after",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "deprecated": true
+      }
+    },
+    "/api/v1/agents/{id}/files": {
+      "get": {
+        "summary": "List directory or read base64 file chunk",
+        "operationId": "get__api_v1_agents_id_files",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "path",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "deprecated": true
+      }
+    },
+    "/env/v1/self": {
+      "get": {
+        "summary": "Read own environment",
+        "operationId": "get__env_v1_self",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "servers": [
+          {
+            "url": "http://10.203.0.1:8089",
+            "description": "Individual-only network; bearer token and source IP required"
+          }
+        ],
+        "deprecated": true
+      }
+    },
+    "/env/v1/ledger": {
+      "get": {
+        "summary": "Read own token ledger",
+        "operationId": "get__env_v1_ledger",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "servers": [
+          {
+            "url": "http://10.203.0.1:8089",
+            "description": "Individual-only network; bearer token and source IP required"
+          }
+        ],
+        "parameters": [
+          {
+            "name": "after",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        ],
+        "deprecated": true
+      }
+    },
+    "/env/v1/submissions": {
+      "get": {
+        "summary": "List own submissions",
+        "operationId": "get__env_v1_submissions",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "servers": [
+          {
+            "url": "http://10.203.0.1:8089",
+            "description": "Individual-only network; bearer token and source IP required"
+          }
+        ],
+        "parameters": [
+          {
+            "name": "after",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        ],
+        "deprecated": true
+      }
+    },
+    "/env/v1/submissions/{id}": {
+      "get": {
+        "summary": "Get own submission",
+        "operationId": "get__env_v1_submissions_id",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "servers": [
+          {
+            "url": "http://10.203.0.1:8089",
+            "description": "Individual-only network; bearer token and source IP required"
+          }
+        ],
+        "deprecated": true
+      }
+    },
+    "/v1/models": {
+      "get": {
+        "summary": "List logical models",
+        "operationId": "get__v1_models",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "servers": [
+          {
+            "url": "http://10.203.0.1:8089",
+            "description": "Individual-only network; bearer token and source IP required"
+          }
+        ]
+      }
+    },
+    "/v1/responses/{id}": {
+      "get": {
+        "summary": "Get owner-scoped model response",
+        "operationId": "get__v1_responses_id",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "servers": [
+          {
+            "url": "http://10.203.0.1:8089",
+            "description": "Individual-only network; bearer token and source IP required"
+          }
+        ]
+      }
+    },
+    "/env/v1/events": {
+      "get": {
+        "summary": "Read own durable events",
+        "operationId": "get__env_v1_events",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "after",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "servers": [
+          {
+            "url": "http://10.203.0.1:8089",
+            "description": "Individual-only network; bearer token and source IP required"
+          }
+        ],
+        "deprecated": true
+      }
+    },
+    "/v1/chat/completions": {
+      "post": {
+        "summary": "OpenAI-compatible text/function inference; see llm.txt for supported subset",
+        "operationId": "post__v1_chat_completions",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              },
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "model"
+                ],
+                "properties": {
+                  "model": {
+                    "type": "string"
+                  },
+                  "stream": {
+                    "type": "boolean"
+                  },
+                  "previous_response_id": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "servers": [
+          {
+            "url": "http://10.203.0.1:8089",
+            "description": "Individual-only network; bearer token and source IP required"
+          }
+        ]
+      }
+    },
+    "/v1/responses": {
+      "post": {
+        "summary": "OpenAI-compatible text/function inference; see llm.txt for supported subset",
+        "operationId": "post__v1_responses",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              },
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "model"
+                ],
+                "properties": {
+                  "model": {
+                    "type": "string"
+                  },
+                  "stream": {
+                    "type": "boolean"
+                  },
+                  "previous_response_id": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "servers": [
+          {
+            "url": "http://10.203.0.1:8089",
+            "description": "Individual-only network; bearer token and source IP required"
+          }
+        ]
+      }
+    },
+    "/healthz": {
+      "get": {
+        "summary": "Service metadata",
+        "operationId": "get__healthz",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": []
+      }
+    },
+    "/readyz": {
+      "get": {
+        "summary": "Service metadata",
+        "operationId": "get__readyz",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [],
+        "description": "Control-plane readiness plus runtime availability and configured-credential flags. The control plane can be ready while youki isolation prerequisites or external model credentials are unavailable."
+      }
+    },
+    "/openapi.json": {
+      "get": {
+        "summary": "Service metadata",
+        "operationId": "get__openapi.json",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": []
+      }
+    },
+    "/llm.txt": {
+      "get": {
+        "summary": "Complete agent-facing usage manual",
+        "operationId": "get__llm.txt",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": []
+      }
+    },
+    "/llms.txt": {
+      "get": {
+        "summary": "Complete agent-facing usage manual",
+        "operationId": "get__llms.txt",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": []
+      }
+    },
+    "/metrics": {
+      "get": {
+        "summary": "Authenticated Prometheus metrics",
+        "operationId": "get__metrics",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "description": "Creator-scoped metrics; other creators' populations and accounting are excluded."
+      }
+    },
+    "/services/{id}/{port}": {
+      "get": {
+        "summary": "Authenticated sandboxed service proxy; path may contain slash segments",
+        "operationId": "get__services_id_port",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "headers": {
+              "X-Survive-Preview": {
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "live",
+                    "archive"
+                  ]
+                },
+                "description": "Origin of returned content."
+              },
+              "X-Survive-Preview-Detail": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Archive source and capture completeness, if applicable."
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service offline and no saved preview available."
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "port",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "description": "Serve a registered HTTP service or its saved preview to its authenticated creator. A stopped organism is never started by a preview request. Relative asset requests use the same authentication and service route."
+      }
+    },
+    "/services/{id}/{port}/{path}": {
+      "get": {
+        "summary": "Authenticated sandboxed service proxy; path may contain slash segments",
+        "operationId": "get__services_id_port_path",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "headers": {
+              "X-Survive-Preview": {
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "live",
+                    "archive"
+                  ]
+                },
+                "description": "Origin of returned content."
+              },
+              "X-Survive-Preview-Detail": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Archive source and capture completeness, if applicable."
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service offline and no saved preview available."
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "port",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "path",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "description": "Serve a registered HTTP service or its saved preview to its authenticated creator. A stopped organism is never started by a preview request. Relative asset requests use the same authentication and service route."
+      }
+    },
+    "/api/v1/agents/{id}/events/{event}": {
+      "get": {
+        "summary": "Read an exact event JSON as bounded base64 chunks",
+        "operationId": "get__api_v1_agents_id_events_event",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "event",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 65536
+            }
+          }
+        ],
+        "deprecated": true
+      }
+    },
+    "/env/v1/events/{id}": {
+      "get": {
+        "summary": "Read an exact event JSON as bounded base64 chunks",
+        "operationId": "get__env_v1_events_id",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 65536
+            }
+          }
+        ],
+        "servers": [
+          {
+            "url": "http://10.203.0.1:8089",
+            "description": "Individual-only network; bearer token and source IP required"
+          }
+        ],
+        "deprecated": true
+      }
+    },
+    "/api/v1/submissions/{id}": {
+      "get": {
+        "summary": "Read an owned submission including frozen evidence and judgment",
+        "operationId": "get_submission_detail",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "deprecated": true
+      }
+    },
+    "/api/v1/overview": {
+      "get": {
+        "summary": "Get creator-scoped observer overview",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "description": "Returns summary, experiments with stats, public agents, newest 30 activity previews and safe system/runtime readiness. Credential flags indicate configuration, not verified upstream health. No keys or upstream URLs are returned.",
+        "deprecated": true
+      }
+    },
+    "/api/v1/topology": {
+      "get": {
+        "summary": "Get creator-scoped network topology",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "experiment_id",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "description": "Nodes: agent, experiment, peers, llm, judge, internet. Configured edges are permissions/membership; observed edges are cumulative durable token usage/submissions. Neither is a live packet capture.",
+        "deprecated": true
+      }
+    },
+    "/api/v1/agents": {
+      "get": {
+        "summary": "List and filter owned individuals",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "experiment_id",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "state",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "queued",
+                "starting",
+                "running",
+                "depleted",
+                "failed",
+                "suspended"
+              ]
+            }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "after",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1000,
+              "default": 200
+            }
+          }
+        ],
+        "description": "Returns agents, total and numeric next_cursor using the sandbox slot.",
+        "deprecated": true
+      }
+    },
+    "/console/": {
+      "get": {
+        "summary": "Load the Rust/WASM observer console",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Console HTML; assets contain no credentials",
+            "content": {
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Console assets not installed"
+          }
+        }
+      }
+    },
+    "/env/v1/peers": {
+      "get": {
+        "summary": "Discover same-experiment peer services",
+        "operationId": "get__env_v1_peers",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "servers": [
+          {
+            "url": "http://10.203.0.1:8089",
+            "description": "Individual-only network; bearer token and source IP required"
+          }
+        ],
+        "description": "Requires peer access. Returns running same-experiment peers and their registered HTTP service URLs. Peer communication follows the immutable experiment network policy.",
+        "deprecated": true
+      }
+    },
+    "/api/v2/overview": {
+      "get": {
+        "summary": "Creator-scoped dashboard and runtime readiness",
+        "responses": {
+          "200": {
+            "description": "Creator-scoped dashboard and runtime readiness",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing credential"
+          },
+          "403": {
+            "description": "Access denied"
+          }
+        }
+      }
+    },
+    "/api/v2/topology": {
+      "get": {
+        "summary": "Environment membership, configured access and recorded activity",
+        "responses": {
+          "200": {
+            "description": "Environment membership, configured access and recorded activity",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing credential"
+          },
+          "403": {
+            "description": "Access denied"
+          }
+        }
+      }
+    },
+    "/api/v2/environments": {
+      "post": {
+        "summary": "Create a private immutable environment",
+        "responses": {
+          "201": {
+            "description": "Create a private immutable environment",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "environment": {
+                      "$ref": "#/components/schemas/LifeEnvironment"
+                    }
+                  },
+                  "required": [
+                    "environment"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing credential"
+          },
+          "403": {
+            "description": "Access denied"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EnvironmentInput"
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "summary": "List owned environments",
+        "responses": {
+          "200": {
+            "description": "List owned environments",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "environments": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/LifeEnvironment"
+                      }
+                    }
+                  },
+                  "required": [
+                    "environments"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing credential"
+          },
+          "403": {
+            "description": "Access denied"
+          }
+        }
+      }
+    },
+    "/api/v2/environments/{id}": {
+      "get": {
+        "summary": "Read an owned environment",
+        "responses": {
+          "200": {
+            "description": "Read an owned environment",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "environment": {
+                      "$ref": "#/components/schemas/LifeEnvironment"
+                    }
+                  },
+                  "required": [
+                    "environment"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing credential"
+          },
+          "403": {
+            "description": "Access denied"
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/api/v2/environments/{id}/organisms": {
+      "post": {
+        "summary": "Create organisms in an environment",
+        "responses": {
+          "201": {
+            "description": "Create organisms in an environment",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "organisms": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Organism"
+                      }
+                    }
+                  },
+                  "required": [
+                    "organisms"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing credential"
+          },
+          "403": {
+            "description": "Access denied"
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BirthBatch"
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "summary": "List organisms in an environment",
+        "responses": {
+          "200": {
+            "description": "List organisms in an environment",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "organisms": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Organism"
+                      }
+                    }
+                  },
+                  "required": [
+                    "organisms"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing credential"
+          },
+          "403": {
+            "description": "Access denied"
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/api/v2/organisms": {
+      "get": {
+        "summary": "List owned organisms",
+        "responses": {
+          "200": {
+            "description": "List owned organisms",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "organisms": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Organism"
+                      }
+                    }
+                  },
+                  "required": [
+                    "organisms"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing credential"
+          },
+          "403": {
+            "description": "Access denied"
+          }
+        }
+      }
+    },
+    "/api/v2/organisms/{id}": {
+      "get": {
+        "summary": "Read an organism and its life status",
+        "responses": {
+          "200": {
+            "description": "Read an organism and its life status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "organism": {
+                      "$ref": "#/components/schemas/Organism"
+                    }
+                  },
+                  "required": [
+                    "organism"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing credential"
+          },
+          "403": {
+            "description": "Access denied"
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/api/v2/organisms/{id}/grants": {
+      "post": {
+        "summary": "Grant energy or running time atomically",
+        "responses": {
+          "200": {
+            "description": "Grant energy or running time atomically",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "grant": {
+                      "$ref": "#/components/schemas/Grant"
+                    },
+                    "life": {
+                      "$ref": "#/components/schemas/LifeState"
+                    }
+                  },
+                  "required": [
+                    "grant",
+                    "life"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing credential"
+          },
+          "403": {
+            "description": "Access denied"
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GrantInput"
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "summary": "List grants",
+        "responses": {
+          "200": {
+            "description": "List grants",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "grants": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Grant"
+                      }
+                    },
+                    "next_cursor": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "grants",
+                    "next_cursor"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing credential"
+          },
+          "403": {
+            "description": "Access denied"
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/api/v2/organisms/{id}/reports": {
+      "get": {
+        "summary": "List reports",
+        "responses": {
+          "200": {
+            "description": "List reports",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "reports": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Report"
+                      }
+                    },
+                    "next_cursor": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "reports",
+                    "next_cursor"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing credential"
+          },
+          "403": {
+            "description": "Access denied"
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/api/v2/organisms/{id}/files": {
+      "get": {
+        "summary": "List directory or read base64 file chunk",
+        "operationId": "get__api_v1_agents_id_files",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "path",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ]
+      }
+    },
+    "/api/v2/organisms/{id}/events": {
+      "get": {
+        "summary": "Page durable events",
+        "operationId": "get__api_v1_agents_id_events",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "after",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ]
+      }
+    },
+    "/api/v2/organisms/{id}/ledger": {
+      "get": {
+        "summary": "Get token accounting",
+        "operationId": "get__api_v1_agents_id_ledger",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "after",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        ]
+      }
+    },
+    "/api/v2/organisms/{id}/services": {
+      "get": {
+        "summary": "List registered services",
+        "operationId": "get__api_v1_agents_id_services",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "services": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "name": {
+                            "type": "string"
+                          },
+                          "port": {
+                            "type": "integer"
+                          },
+                          "preview": {
+                            "$ref": "#/components/schemas/ServicePreview"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/api/v2/organisms/{id}/events/{event}": {
+      "get": {
+        "summary": "Read an exact event JSON as bounded base64 chunks",
+        "operationId": "get__api_v1_agents_id_events_event",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "event",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 65536
+            }
+          }
+        ]
+      }
+    },
+    "/env/v2/self": {
+      "get": {
+        "summary": "Read organism self",
+        "responses": {
+          "200": {
+            "description": "Read organism self",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "environment": {
+                      "$ref": "#/components/schemas/LifeEnvironment"
+                    },
+                    "organism": {
+                      "$ref": "#/components/schemas/Organism"
+                    },
+                    "life": {
+                      "$ref": "#/components/schemas/LifeState"
+                    },
+                    "models": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/PriceQuote"
+                      }
+                    },
+                    "paths": {
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "environment",
+                    "organism",
+                    "life",
+                    "models",
+                    "paths"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing credential"
+          },
+          "403": {
+            "description": "Access denied"
+          }
+        }
+      }
+    },
+    "/env/v2/life": {
+      "get": {
+        "summary": "Read organism life",
+        "responses": {
+          "200": {
+            "description": "Read organism life",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LifeState"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing credential"
+          },
+          "403": {
+            "description": "Access denied"
+          }
+        }
+      }
+    },
+    "/env/v2/models": {
+      "get": {
+        "summary": "Read organism models",
+        "responses": {
+          "200": {
+            "description": "Read organism models",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "models": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/PriceQuote"
+                      }
+                    }
+                  },
+                  "required": [
+                    "models"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing credential"
+          },
+          "403": {
+            "description": "Access denied"
+          }
+        }
+      }
+    },
+    "/env/v2/events": {
+      "get": {
+        "summary": "Read organism events",
+        "responses": {
+          "200": {
+            "description": "Read organism events",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing credential"
+          },
+          "403": {
+            "description": "Access denied"
+          }
+        }
+      }
+    },
+    "/env/v2/ledger": {
+      "get": {
+        "summary": "Read organism ledger",
+        "responses": {
+          "200": {
+            "description": "Read organism ledger",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing credential"
+          },
+          "403": {
+            "description": "Access denied"
+          }
+        }
+      }
+    },
+    "/env/v2/reports": {
+      "get": {
+        "summary": "Read organism reports",
+        "responses": {
+          "200": {
+            "description": "Read organism reports",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing credential"
+          },
+          "403": {
+            "description": "Access denied"
+          }
+        }
+      },
+      "post": {
+        "summary": "Send a one-way report and capture workspace files",
+        "responses": {
+          "200": {
+            "description": "Send a one-way report and capture workspace files",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "report": {
+                      "allOf": [
+                        {
+                          "$ref": "#/components/schemas/Report"
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "snapshots": {
+                              "type": "array",
+                              "items": {
+                                "$ref": "#/components/schemas/Snapshot"
+                              }
+                            }
+                          },
+                          "required": [
+                            "snapshots"
+                          ]
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "report"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing credential"
+          },
+          "403": {
+            "description": "Access denied"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReportInput"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/env/v2/peers": {
+      "get": {
+        "summary": "Read organism peers",
+        "responses": {
+          "200": {
+            "description": "Read organism peers",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing credential"
+          },
+          "403": {
+            "description": "Access denied"
+          }
+        }
+      }
+    },
+    "/api/v2/organisms/{id}/reports/{report}": {
+      "get": {
+        "summary": "Read a frozen report with attachment bytes and SHA-256 digests",
+        "responses": {
+          "200": {
+            "description": "Read a frozen report with attachment bytes and SHA-256 digests",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "report": {
+                      "allOf": [
+                        {
+                          "$ref": "#/components/schemas/Report"
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "snapshots": {
+                              "type": "array",
+                              "items": {
+                                "$ref": "#/components/schemas/Snapshot"
+                              }
+                            }
+                          },
+                          "required": [
+                            "snapshots"
+                          ]
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "report"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing credential"
+          },
+          "403": {
+            "description": "Access denied"
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "report",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/env/v2/events/{id}": {
+      "get": {
+        "summary": "Read an exact event JSON as bounded base64 chunks",
+        "operationId": "get__env_v1_events_id",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 65536
+            }
+          }
+        ],
+        "servers": [
+          {
+            "url": "http://10.203.0.1:8089",
+            "description": "Individual-only network; bearer token and source IP required"
+          }
+        ]
+      }
+    },
+    "/env/v2/name": {
+      "post": {
+        "summary": "Set your own display name",
+        "responses": {
+          "200": {
+            "description": "Set your own display name",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing credential"
+          },
+          "403": {
+            "description": "Access denied"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "name"
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/env/v2/services": {
+      "post": {
+        "summary": "Register HTTP service",
+        "responses": {
+          "200": {
+            "description": "Register HTTP service",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing credential"
+          },
+          "403": {
+            "description": "Access denied"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ServiceRegistration"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/env/v2/restart": {
+      "post": {
+        "summary": "Request restart using current boot manifest",
+        "responses": {
+          "401": {
+            "description": "Missing credential"
+          },
+          "403": {
+            "description": "Access denied"
+          },
+          "202": {
+            "description": "Request restart using current boot manifest",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

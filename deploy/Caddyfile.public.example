@@ -1,0 +1,22 @@
+# Set these in the proxy's private environment:
+# SURVIVE_PUBLIC_IP: the deployment's public IP address
+# SURVIVE_UPSTREAM: the Rust API address reachable from this proxy
+# Merge these options into an existing global block if sharing a Caddy instance.
+{
+    default_sni {$SURVIVE_PUBLIC_IP}
+}
+
+https://{$SURVIVE_PUBLIC_IP} {
+    tls {
+        issuer acme {
+            dir https://acme-v02.api.letsencrypt.org/directory
+            profile shortlived
+        }
+    }
+    encode zstd gzip
+    reverse_proxy {$SURVIVE_UPSTREAM:127.0.0.1:8088}
+}
+
+http://{$SURVIVE_PUBLIC_IP} {
+    redir https://{$SURVIVE_PUBLIC_IP}{uri} 308
+}

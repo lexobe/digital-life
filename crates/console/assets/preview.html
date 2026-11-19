@@ -1,0 +1,13 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><title>服务预览</title></head><body>
+<script>
+'use strict';
+function present(event) {
+    if (parent === window || event.source !== parent || event.origin !== new URL(location.href).origin || typeof event.data !== 'string') return;
+    removeEventListener('message', present);
+    document.open();
+    document.write(event.data);
+    document.close();
+}
+addEventListener('message', present);
+</script></body></html>

@@ -1,0 +1,23 @@
+[package]
+name = "survive-sandbox"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+libc.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+toml.workspace = true
+tempfile.workspace = true
+survive-core = { path = "../core" }
+
+[[bin]]
+name = "survive-init"
+path = "src/bin/survive-init.rs"
+
+[[bin]]
+name = "survive-sandbox"
+path = "src/bin/survive-sandbox.rs"

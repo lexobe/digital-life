@@ -1,0 +1,61 @@
+data_dir = "/var/lib/survive-platform"
+listen = "127.0.0.1:8088"
+# Set to the public HTTPS origin so /llm.txt includes deployment-specific links.
+# public_origin = "https://survive.example"
+env_listen = "10.203.0.1:8089"
+source_dir = "/opt/survive-platform/source"
+console_dir = "/opt/survive-platform/console"
+
+[[creators]]
+id = "default"
+token_env = "SURVIVE_CREATOR_TOKEN"
+
+[gateway]
+global_concurrency = 16
+per_agent_concurrency = 2
+max_request_bytes = 262144
+max_response_bytes = 4194304
+max_sse_event_bytes = 262144
+stream_buffer_events = 8
+max_output_tokens = 8192
+default_output_tokens = 1024
+request_timeout_ms = 120000
+
+# Integer energy units per raw input/output token for this model ID.
+# OpenAI standard text rates (2026-11-19), normalized to 1 energy per Luna input token.
+# https://developers.openai.com/api/docs/models
+[gateway.prices."gpt-6.2-sol"]
+input = 20
+output = 100
+
+[gateway.prices."gpt-6-luna"]
+input = 1
+output = 5
+
+[gateway.prices."gpt-6.2-astra"]
+input = 80
+output = 400
+
+[gateway.prices."gpt-6.1-terra"]
+input = 10
+output = 50
+
+[[gateway.providers]]
+name = "primary"
+base_url = "https://api.openai.com/v1"
+api_key_env = "SURVIVE_PRIMARY_API_KEY"
+protocols = ["chat", "responses"]
+models = ["gpt-6.2-sol", "gpt-6-luna", "gpt-6.2-astra", "gpt-6.1-terra"]
+
+# Add [[gateway.providers]] with another base_url, api_key_env and model mapping
+# to enable CLIProxy or another compatible failover route. Provider order is priority.
+
+[sandbox]
+data_dir = "/var/lib/survive-platform"
+rootfs = "/var/lib/survive-rootfs"
+youki = "/opt/survive-platform/bin/youki"
+init_binary = "/opt/survive-platform/bin/survive-init"
+agent_binary = "/opt/survive-platform/bin/survive-agent"
+gateway_url = "http://10.203.0.1:8089"
+total_memory_bytes = 1073741824
+disk_bytes = 2147483648

@@ -1,0 +1,49 @@
+# Embed these tables in the parent server config. Omit [gateway] and change
+# [[gateway.providers]] to [[providers]] for standalone GatewayConfig parsing.
+[gateway]
+global_concurrency = 16
+per_agent_concurrency = 2
+max_request_bytes = 262144
+max_response_bytes = 4194304
+max_sse_event_bytes = 262144
+max_output_tokens = 8192
+default_output_tokens = 1024
+minimum_input_reservation = 1024
+request_timeout_ms = 120000
+connect_timeout_ms = 10000
+stream_buffer_events = 8
+reconcile_max_attempts = 16
+reconcile_time_budget_ms = 20000
+
+# OpenAI standard text rates (2026-11-19), normalized to 1 energy per Luna input token.
+# https://developers.openai.com/api/docs/models
+[gateway.prices."gpt-6.2-sol"]
+input = 20
+output = 100
+
+[gateway.prices."gpt-6-luna"]
+input = 1
+output = 5
+
+[gateway.prices."gpt-6.2-astra"]
+input = 80
+output = 400
+
+[gateway.prices."gpt-6.1-terra"]
+input = 10
+output = 50
+
+[[gateway.providers]]
+name = "primary"
+base_url = "https://api.openai.com/v1"
+api_key_env = "SURVIVE_PRIMARY_API_KEY"
+protocols = ["chat", "responses"]
+models = ["gpt-6.2-sol", "gpt-6-luna", "gpt-6.2-astra", "gpt-6.1-terra"]
+
+# Optional fallback; missing/empty environment variables disable that route.
+[[gateway.providers]]
+name = "fallback"
+base_url = "https://your-compatible-provider.example/v1"
+api_key_env = "SURVIVE_FALLBACK_API_KEY"
+protocols = ["chat", "responses"]
+models = ["gpt-6.2-sol", "gpt-6-luna", "gpt-6.2-astra", "gpt-6.1-terra"]

@@ -1,1 +1,14 @@
 .DS_Store
+/target/
+/data/
+/config.local.toml
+/.local/
+/deploy/*.local.*
+/deploy/environment
+**/target/
+/crates/console/dist/
+/crates/console/.cache/
+*.key
+.env
+.env.*
+!.env.example
