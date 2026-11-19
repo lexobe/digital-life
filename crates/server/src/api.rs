@@ -20,6 +20,18 @@ mod life;
 mod preview;
 
 pub fn owner_router(app: App) -> Router {
+    let frames = admission(
+        Router::new()
+            .route(
+                "/api/v2/organisms/{id}/desktop",
+                get(crate::desktop::observe),
+            )
+            .route(
+                "/api/v2/organisms/{id}/desktop/snapshot",
+                get(crate::desktop::snapshot),
+            )
+            .with_state(app.clone()),
+    );
     admission(
         Router::new()
             .merge(life::owner_routes())
@@ -53,8 +65,16 @@ pub fn owner_router(app: App) -> Router {
             .layer(DefaultBodyLimit::max(2 * 1024 * 1024))
             .with_state(app),
     )
+    .merge(frames)
 }
 pub fn environment_router(app: App) -> Router {
+    // Waiting for viewers has its own concurrency budget, independent of inference and life calls.
+    let frames = admission(
+        Router::new()
+            .route("/env/v2/desktop/demand", get(crate::desktop::demand))
+            .route("/env/v2/desktop/frame", post(crate::desktop::upload))
+            .with_state(app.clone()),
+    );
     admission(
         Router::new()
             .merge(life::guest_routes())
@@ -72,6 +92,7 @@ pub fn environment_router(app: App) -> Router {
             .layer(DefaultBodyLimit::max(2 * 1024 * 1024))
             .with_state(app),
     )
+    .merge(frames)
 }
 fn admission(router: Router) -> Router {
     use std::{collections::BTreeMap, sync::Arc};
@@ -156,7 +177,7 @@ pub(crate) fn owner(app: &App, h: &HeaderMap) -> Result<String, ApiError> {
         .find_map(|(id, v)| if *v == hash { Some(id.clone()) } else { None })
         .ok_or_else(ApiError::forbidden)
 }
-async fn owned_agent(app: &App, h: &HeaderMap, id: String) -> Result<Agent, ApiError> {
+pub(crate) async fn owned_agent(app: &App, h: &HeaderMap, id: String) -> Result<Agent, ApiError> {
     let owner = owner(app, h)?;
     app.db(move |s| {
         let a = s.get_agent(&id)?;

@@ -52,8 +52,25 @@ fn isolate_init_fds() -> std::io::Result<()> {
 }
 
 #[cfg(target_os = "linux")]
+pub(crate) fn spawn_child(cmd: &mut std::process::Command) -> std::io::Result<std::process::Child> {
+    use std::os::unix::process::CommandExt;
+    unsafe {
+        cmd.pre_exec(|| {
+            let mut empty: libc::sigset_t = std::mem::zeroed();
+            libc::sigemptyset(&mut empty);
+            let err = libc::pthread_sigmask(libc::SIG_SETMASK, &empty, std::ptr::null_mut());
+            if err != 0 {
+                return Err(std::io::Error::from_raw_os_error(err));
+            }
+            Ok(())
+        });
+    }
+    cmd.spawn()
+}
+
+#[cfg(target_os = "linux")]
 pub fn run_init() -> Result<()> {
-    use std::{fs, os::unix::process::CommandExt, process::Command};
+    use std::{fs, os::unix::fs::PermissionsExt, process::Command};
     ensure!(
         unsafe { libc::getpid() } == 1,
         "survive-init must run as PID 1 inside a sandbox"
@@ -82,22 +99,18 @@ pub fn run_init() -> Result<()> {
             eprintln!("init status: {e}");
         }
     };
-    let _ = fs::create_dir(work.join(".home"));
+    let home = work.join(".home");
+    if fs::create_dir(&home).is_ok() {
+        // The browser may traverse this directory to reach its own private home.
+        let _ = fs::set_permissions(&home, fs::Permissions::from_mode(0o711));
+    }
+    let mut desktop = crate::desktop::Desktop::default();
+    desktop.start();
     let spawned = (|| -> Result<std::process::Child> {
         let boot = BootManifest::read(&work.join("boot.json"))?;
         let mut cmd = Command::new(&boot.argv[0]);
         cmd.args(&boot.argv[1..]).current_dir(work);
-        unsafe {
-            cmd.pre_exec(|| {
-                let mut empty: libc::sigset_t = std::mem::zeroed();
-                libc::sigemptyset(&mut empty);
-                if libc::pthread_sigmask(libc::SIG_SETMASK, &empty, std::ptr::null_mut()) != 0 {
-                    return Err(std::io::Error::last_os_error());
-                }
-                Ok(())
-            });
-        }
-        Ok(cmd.spawn()?)
+        Ok(spawn_child(&mut cmd)?)
     })();
     let mut core = match spawned {
         Ok(child) => {
@@ -117,6 +130,7 @@ pub fn run_init() -> Result<()> {
             if pid <= 0 {
                 break;
             }
+            desktop.exited(pid, status);
             if Some(pid) == core {
                 core = None;
                 report(

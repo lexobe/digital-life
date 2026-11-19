@@ -1,6 +1,8 @@
 pub mod api;
 pub mod config;
 pub mod console;
+mod desktop;
+pub use desktop::DesktopSessions;
 pub mod lifecycle;
 
 use anyhow::{Context, Result, ensure};
@@ -22,6 +24,7 @@ pub struct App(pub Arc<Inner>);
 pub struct Inner {
     pub config: Config,
     pub store: Store,
+    pub desktop: DesktopSessions,
     pub gateway: Gateway,
     pub sandbox: Option<SandboxManager>,
     pub service_client: reqwest::Client,
@@ -112,6 +115,7 @@ impl App {
             service_client,
             creators,
             lifecycle_lock: Mutex::new(()),
+            desktop: Default::default(),
             runtime: tokio::sync::RwLock::new(runtime),
         })))
     }

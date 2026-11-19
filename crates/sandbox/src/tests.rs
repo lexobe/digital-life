@@ -179,7 +179,10 @@ fn oci_has_real_isolation_and_no_host_credentials_or_sockets() {
     );
     assert_eq!(v["linux"]["resources"]["unified"]["memory.swap.max"], "0");
     assert_eq!(v["linux"]["resources"]["pids"]["limit"], s.limits.pids);
-    assert_eq!(v["linux"]["resources"]["cpu"]["quota"], 50000);
+    assert_eq!(
+        v["linux"]["resources"]["cpu"]["quota"],
+        s.limits.cpu_millis * 100
+    );
     assert_eq!(v["root"]["readonly"], false);
     assert_eq!(v["linux"]["seccomp"]["defaultAction"], "SCMP_ACT_ERRNO");
     let calls = v["linux"]["seccomp"]["syscalls"][0]["names"]

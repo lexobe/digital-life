@@ -84,7 +84,7 @@ fn fill_disk() -> Result<Value> {
 fn pids_limit() -> Result<Value> {
     let mut children = Vec::new();
     let mut errno = None;
-    for _ in 0..180 {
+    for _ in 0..300 {
         match Command::new("/bin/sleep")
             .arg("30")
             .stdin(Stdio::null())

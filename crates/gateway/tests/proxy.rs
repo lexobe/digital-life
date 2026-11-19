@@ -1053,6 +1053,10 @@ async fn model_choice_prices_each_failover_attempt_and_enforces_individual_permi
     assert_eq!(body["model"], "big");
     assert_eq!(primary.requests()[0].body["model"], "large-primary");
     assert_eq!(fallback.requests()[0].body["model"], "large-fallback");
+    let context = survive_core::environment_context_message(&env.description);
+    for route in [&primary, &fallback] {
+        assert_eq!(route.requests()[0].body["messages"][0], context);
+    }
     let rs = store.reservations(&organisms[0].id).unwrap();
     assert_eq!(rs.len(), 2);
     assert!(
@@ -1131,4 +1135,61 @@ async fn reconciliation_after_restart_uses_the_requested_model_price_at_reservat
     assert_eq!(rs[0].price, Some(old_price));
     assert_eq!(rs[0].energy_charged, Some(11 * 2 + 4 * 7));
     assert_eq!(f.store.get_agent(&f.agents[0]).unwrap().used, 50);
+}
+
+#[tokio::test]
+async fn custom_responses_core_receives_its_environment_on_every_call() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = Store::open(directory.path().join("state")).unwrap();
+    let env = store
+        .create_environment(
+            "owner",
+            serde_json::from_value(json!({
+                "description":"固定环境：observe the blue square.","allowed_models":["default"]
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+    let agents = store
+        .birth_organisms(
+            "owner",
+            &env.id,
+            serde_json::from_value(json!({
+                "count":1,"defaults":{"initial_energy":60000,"lifetime_seconds":120}
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+    let upstream = Mock::start(vec![
+        ok(responses_body("resp-first")),
+        ok(responses_body("resp-next")),
+    ])
+    .await;
+    let gateway = Gateway::new(config(vec![upstream.provider("primary")]), store.clone()).unwrap();
+    let authoritative = survive_core::environment_context_message(&env.description);
+    for request in [
+        json!({"model":"default","input":"custom core input","truncation":"auto","store":true}),
+        json!({"model":"default","input":[authoritative,{"role":"user","content":"continue"}],
+               "previous_response_id":"resp-first","instructions":"answer my pending conversation"}),
+    ] {
+        json_body(
+            gateway
+                .completion(&agents[0].id, Protocol::Responses, request)
+                .await
+                .unwrap(),
+        )
+        .await;
+    }
+    let captured = upstream.requests();
+    assert_eq!(
+        captured[0].body["input"][1],
+        json!({"role":"user","content":"custom core input"})
+    );
+    assert_eq!(captured[0].body["truncation"], "disabled");
+    assert_eq!(captured[1].body["previous_response_id"], "resp-first");
+    for call in captured {
+        let items = call.body["input"].as_array().unwrap();
+        assert_eq!(items.first(), Some(&authoritative));
+        assert_eq!(items.iter().filter(|m| **m == authoritative).count(), 1);
+    }
 }

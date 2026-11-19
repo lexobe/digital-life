@@ -212,6 +212,9 @@ impl SandboxSpec {
     pub(crate) fn runtime_id(&self) -> String {
         format!("survive-{}", self.agent_id)
     }
+    pub(crate) fn hostname(&self) -> String {
+        format!("agent-{}", self.slot)
+    }
     pub(crate) fn netns(&self) -> String {
         format!("sv-{}", self.slot)
     }

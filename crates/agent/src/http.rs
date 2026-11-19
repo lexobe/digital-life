@@ -2,7 +2,10 @@ use crate::{Config, journal::save_json};
 use anyhow::{Context, Result, ensure};
 use reqwest::{Client, Method};
 use serde_json::{Value, json};
-use std::path::{Path, PathBuf};
+use std::{
+    path::{Path, PathBuf},
+    time::Duration,
+};
 use tokio::io::AsyncWriteExt;
 
 pub(crate) struct Environment {
@@ -18,19 +21,51 @@ pub(crate) struct Reply {
     pub artifact: PathBuf,
 }
 
+pub(crate) fn private_client(timeout: Duration) -> Result<Client> {
+    Ok(Client::builder()
+        .timeout(timeout)
+        .redirect(reqwest::redirect::Policy::none())
+        .retry(reqwest::retry::never())
+        .no_proxy()
+        .build()?)
+}
+
 impl Environment {
     pub fn new(config: &Config) -> Result<Self> {
         Ok(Self {
-            client: Client::builder()
-                .timeout(config.http_timeout)
-                .redirect(reqwest::redirect::Policy::none())
-                .retry(reqwest::retry::never())
-                .no_proxy()
-                .build()?,
+            client: private_client(config.http_timeout)?,
             base: config.env_url.trim_end_matches('/').to_owned(),
             token: config.token.clone(),
             max_response_bytes: config.max_response_bytes,
         })
+    }
+
+    /// A read-only wake hint. The next turn reads the authoritative message from /self.
+    /// Polling during a long sleep does not create per-poll history artifacts.
+    pub async fn has_pending_message(&self) -> Result<bool> {
+        let mut response = self
+            .client
+            .get(format!(
+                "{}/env/v2/messages?pending=true&limit=1",
+                self.base
+            ))
+            .bearer_auth(&self.token)
+            .send()
+            .await?
+            .error_for_status()?;
+        let mut bytes = Vec::new();
+        while let Some(chunk) = response.chunk().await? {
+            ensure!(
+                bytes.len() + chunk.len() <= self.max_response_bytes.min(16 * 1024),
+                "oversized pending message response"
+            );
+            bytes.extend_from_slice(&chunk);
+        }
+        let body: Value = serde_json::from_slice(&bytes)?;
+        Ok(!body["messages"]
+            .as_array()
+            .context("missing pending messages")?
+            .is_empty())
     }
 
     /// Exactly one HTTP attempt. In particular, no hidden retry of a POST.
@@ -42,11 +77,23 @@ impl Environment {
         body: Option<&Value>,
         directory: &Path,
     ) -> Result<Reply> {
+        self.request_recorded(method, path, body, body, directory)
+            .await
+    }
+
+    pub async fn request_recorded(
+        &self,
+        method: Method,
+        path: &str,
+        body: Option<&Value>,
+        recorded: Option<&Value>,
+        directory: &Path,
+    ) -> Result<Reply> {
         tokio::fs::create_dir_all(directory).await?;
         let url = format!("{}{path}", self.base);
         save_json(
             &directory.join("request.json"),
-            &json!({"method":method.as_str(), "url":url, "body":body}),
+            &json!({"method":method.as_str(), "url":url, "body":recorded}),
         )?;
         let mut request = self.client.request(method, &url).bearer_auth(&self.token);
         if let Some(body) = body {

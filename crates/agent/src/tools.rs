@@ -8,7 +8,7 @@ use std::{
     process::Stdio,
     time::Duration,
 };
-use survive_core::ServiceRegistration;
+use survive_core::{MESSAGE_TEXT_MAX_BYTES, ServiceRegistration};
 use tokio::{
     io::{AsyncReadExt, AsyncSeekExt},
     process::Command,
@@ -20,6 +20,7 @@ pub(crate) fn definitions() -> Value {
     let integer = || json!({"type":"integer", "minimum":0});
     let tool = |name: &str, description: &str, parameters: Value| json!({"type":"function", "function":{"name":name,"description":description,"parameters":parameters}});
     json!([
+        crate::computer::definition(),
         tool(
             "shell",
             "Run /bin/sh -c in the sandbox. Full stdout/stderr are saved as files. May install tools, compile /work/source, and replace /work/boot.json. Timeout may leave partial side effects; never assume failure means nothing happened.",
@@ -46,10 +47,18 @@ pub(crate) fn definitions() -> Value {
         ),
         tool(
             "env",
-            "Read your environment, life, events, energy ledger, priced models, peers or reports. Full responses are saved locally.",
+            "Read your environment, life, events, energy ledger, priced models, peers, reports or conversation messages. Full responses are saved locally.",
             object(
-                json!({"resource":{"type":"string","enum":["self","life","events","ledger","models","peers","reports"]},"after":string(),"limit":{"type":"integer","minimum":1,"maximum":1000}}),
+                json!({"resource":{"type":"string","enum":["self","life","events","ledger","models","peers","reports","messages"]},"after":string(),"limit":{"type":"integer","minimum":1,"maximum":1000}}),
                 &["resource"]
+            )
+        ),
+        tool(
+            "reply",
+            "Answer a creator message in the conversation. Use its sequence as reply_to. Each creator message can be answered once.",
+            object(
+                json!({"reply_to":{"type":"integer","minimum":1},"text":{"type":"string","minLength":1,"maxLength":MESSAGE_TEXT_MAX_BYTES,"description":format!("Nonblank reply, up to {MESSAGE_TEXT_MAX_BYTES} UTF-8 bytes.")}}),
+                &["reply_to", "text"]
             )
         ),
         tool(
@@ -80,7 +89,7 @@ pub(crate) fn definitions() -> Value {
         ),
         tool(
             "sleep",
-            "Sleep for seconds (maximum 86400 by default). Interrupted sleeps are recorded as uncertain and are not repeated automatically.",
+            "Sleep for seconds (maximum 86400 by default). A pending creator message can wake you early. Interrupted sleeps are recorded as uncertain and are not repeated automatically.",
             object(json!({"seconds":integer()}), &["seconds"])
         ),
         tool(
@@ -150,6 +159,12 @@ struct ReportArgs {
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
+struct ReplyArgs {
+    reply_to: u64,
+    text: String,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct NameArgs {
     name: String,
 }
@@ -181,6 +196,7 @@ async fn execute_inner(
     tokio::fs::create_dir_all(directory).await?;
     let mut restart = false;
     let value = match name {
+        "computer" => crate::computer::execute(arguments, directory).await?,
         "shell" => {
             let args: ShellArgs = serde_json::from_str(arguments)?;
             let timeout = args
@@ -268,7 +284,14 @@ async fn execute_inner(
             ensure!(
                 matches!(
                     args.resource.as_str(),
-                    "self" | "life" | "events" | "ledger" | "models" | "peers" | "reports"
+                    "self"
+                        | "life"
+                        | "events"
+                        | "ledger"
+                        | "models"
+                        | "peers"
+                        | "reports"
+                        | "messages"
                 ),
                 "unknown environment resource"
             );
@@ -289,6 +312,23 @@ async fn execute_inner(
                     .unwrap_or_default()
             );
             request_result(environment, Method::GET, &path, None, directory).await?
+        }
+        "reply" => {
+            let args: ReplyArgs = serde_json::from_str(arguments)?;
+            ensure!(args.reply_to > 0, "reply_to must be a positive sequence");
+            ensure!(
+                !args.text.trim().is_empty() && args.text.len() <= MESSAGE_TEXT_MAX_BYTES,
+                "reply text must contain 1 to {MESSAGE_TEXT_MAX_BYTES} UTF-8 bytes and cannot be blank"
+            );
+            let body = json!({"reply_to":args.reply_to,"text":args.text,"idempotency_key":format!("seed-reply-{}", args.reply_to)});
+            request_result(
+                environment,
+                Method::POST,
+                "/env/v2/messages",
+                Some(&body),
+                directory,
+            )
+            .await?
         }
         "report" => {
             let args: ReportArgs = serde_json::from_str(arguments)?;
@@ -361,8 +401,20 @@ async fn execute_inner(
                 duration <= config.max_sleep,
                 "sleep exceeds configured maximum"
             );
-            tokio::time::sleep(duration).await;
-            json!({"ok":true,"slept_seconds":args.seconds})
+            let start = tokio::time::Instant::now();
+            let pending = async {
+                loop {
+                    tokio::time::sleep(Duration::from_secs(2)).await;
+                    if environment.has_pending_message().await.unwrap_or(false) {
+                        break;
+                    }
+                }
+            };
+            if tokio::time::timeout(duration, pending).await.is_ok() {
+                json!({"ok":true,"slept_seconds":start.elapsed().as_secs(),"woke_for":"creator_message"})
+            } else {
+                json!({"ok":true,"slept_seconds":args.seconds})
+            }
         }
         "restart" => {
             let _: EmptyArgs = serde_json::from_str(arguments)?;

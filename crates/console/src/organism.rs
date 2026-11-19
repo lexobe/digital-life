@@ -3,6 +3,30 @@ use super::*;
 pub(super) fn life(v: &Value) -> &Value {
     v.get("life").unwrap_or(v)
 }
+fn stop_reasons(l: &Value) -> String {
+    arr(l, "stop_reasons")
+        .iter()
+        .filter_map(Value::as_str)
+        .map(|v| match v {
+            "energy" => "能量耗尽",
+            "lifetime" => "寿命耗尽",
+            v => v,
+        })
+        .collect::<Vec<_>>()
+        .join(" · ")
+}
+fn limits_label(limits: &Value) -> String {
+    let memory = match limits["memory_bytes"].as_u64() {
+        Some(bytes) if bytes % (1024 * 1024) == 0 => format!("{} MiB", num(bytes / (1024 * 1024))),
+        Some(bytes) => format!("{} 字节", num(bytes)),
+        None => "—".into(),
+    };
+    format!(
+        "{memory} · {} 毫核 · {} 个任务",
+        amount(limits, "cpu_millis"),
+        amount(limits, "pids")
+    )
+}
 fn fact(label: &str, value: impl Into<String>) -> Html {
     html! {<div><dt>{label}</dt><dd>{value.into()}</dd></div>}
 }
@@ -33,16 +57,34 @@ impl App {
             return empty("等待生物档案", "请刷新列表后重试。");
         }
         let recipient = id.to_string();
-        html! {<div class="page"><button class="back-link" onclick={ctx.link().callback(|_|Msg::Navigate(Page::Individuals))}>{"← 生物档案"}</button>
+        html! {<div class="page organism-page"><button class="back-link" onclick={ctx.link().callback(|_|Msg::Navigate(Page::Individuals))}>{"← 生物档案"}</button>
         <div class="agent-page-heading"><div><span class="eyebrow">{"ORGANISM"}</span><h1>{display_name(&a)}</h1><code>{id}</code></div>{badge(s(&a,"state"))}
         <button class="button primary" onclick={ctx.link().callback(move|_|Msg::OpenForm(Action::Grant(recipient.clone()),None))}>{icon("plus")}{"发放资源"}</button></div>
-        <div class="tabs" role="tablist">{for [("overview","生命状态"),("events","事件"),("ledger","能量账本"),("reports","报告"),("grants","发放历史"),("files","工作区"),("services","服务")].map(|(key,label)|html!{
+        <div class="tabs" role="tablist">{for [("overview","生命状态"),("desktop","桌面与对话"),("events","事件"),("ledger","能量账本"),("reports","报告"),("grants","发放历史"),("files","工作区"),("services","服务")].map(|(key,label)|html!{
             <button role="tab" aria-selected={(self.tab==key).to_string()} class={classes!((self.tab==key).then_some("active"))} onclick={ctx.link().callback(move|_|Msg::Tab(key.into()))}>{label}</button>
         })}</div>
         {if self.detail_loading{html!{<div class="loading-screen"><span class="spinner"/><p>{"正在读取记录…"}</p></div>}}else if let Some(error)=&self.detail_error{html!{<div class="panel padded" role="alert"><p>{error}</p><button class="text-link" onclick={ctx.link().callback(|_|Msg::RetryDetail)}>{"重试"}</button></div>}}else{match self.tab.as_str(){
-            "overview"=>self.life_view(ctx,&a),"events"=>self.events_view(ctx),"ledger"=>self.ledger_view(ctx),"files"=>self.files_view(ctx),
+            "overview"=>self.life_view(ctx,&a),
+            "desktop"=>html!{<div class="desktop-dialogue" role="tabpanel" aria-label="桌面与对话">
+                {self.desktop_view(ctx,&a)}
+                {self.dialogue_view(ctx,&a)}
+            </div>},
+            "events"=>self.events_view(ctx),"ledger"=>self.ledger_view(ctx),"files"=>self.files_view(ctx),
             "services"=>self.services_view(ctx),"reports"=>self.reports_view(ctx,id),"grants"=>self.grants_view(ctx),_=>Html::default()}}}
         {if matches!(self.tab.as_str(),"ledger"|"reports"|"events"|"grants") && (self.page_cursors.len()>1||self.detail["next_cursor"].is_string()){self.pagination(ctx)}else{Html::default()}}</div>}
+    }
+    pub(super) fn resource_status(&self, ctx: &Context<Self>, organism: &Value) -> Html {
+        let record = life(organism);
+        let reasons = stop_reasons(record);
+        let id = s(organism, "id").to_owned();
+        let state = s(organism, "state");
+        html! {<div class="resource-status">
+            <div><strong>{if reasons.is_empty() {state_label(state)} else {&reasons}}</strong>
+            <span>{format!("剩余寿命 {} · 可用能量 {}", lifetime(record), amount(record, "energy_available"))}</span></div>
+            {if !reasons.is_empty() || state == "depleted" {
+                html! {<button class="text-link" onclick={ctx.link().callback(move |_| Msg::OpenForm(Action::Grant(id.clone()), None))}>{"补充能量或寿命"}{icon("arrow")}</button>}
+            } else {Html::default()}}
+        </div>}
     }
     fn life_view(&self, ctx: &Context<Self>, a: &Value) -> Html {
         let l = life(a);
@@ -56,18 +98,12 @@ impl App {
         let permitted = birth["allowed_models"]
             .as_array()
             .or_else(|| env["allowed_models"].as_array());
-        let stop = arr(l, "stop_reasons")
-            .iter()
-            .filter_map(Value::as_str)
-            .map(|v| match v {
-                "energy" => "能量耗尽",
-                "lifetime" => "寿命耗尽",
-                v => v,
-            })
-            .collect::<Vec<_>>()
-            .join(" · ");
+        let stop = stop_reasons(l);
         html! {<><div class="detail-grid"><section class="panel padded"><h2>{"生命状态"}</h2><div class="detail-balance"><span>{"剩余运行寿命"}</span><strong>{lifetime(l)}</strong></div>
         <dl class="facts">{fact("可用能量",amount(l,"energy_available"))}{fact("账面余额",amount(l,"energy_balance"))}{fact("调用预留",amount(l,"energy_reserved"))}
+        {if a["runtime_limits"].is_object() && a["runtime_limits"] != a["limits"] {
+            html! {<>{fact("当前运行配额", limits_label(&a["runtime_limits"]))}{fact("出生时的配额", limits_label(&a["limits"]))}</>}
+        } else { Html::default() }}
         {fact("最近心跳",timestamp(l,"last_heartbeat_at"))}{fact("启动代次",amount(a,"generation"))}{fact("出生时间",timestamp(a,"created_at"))}
         {if !stop.is_empty(){fact("停止原因",stop)}else{Html::default()}}</dl>
         {if !s(a,"last_error").is_empty(){html!{<p class="inline-error">{s(a,"last_error")}</p>}}else{Html::default()}}

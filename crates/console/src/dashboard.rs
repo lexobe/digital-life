@@ -135,10 +135,12 @@ impl App {
             return html! {<aside class="inspector empty-inspector"><span class="eyebrow">{"ORGANISM"}</span><h2>{"选择一个生物"}</h2><p>{"点击拓扑中的生物节点查看生命状态与档案。"}</p></aside>};
         }
         let id = s(&a, "id").to_owned();
+        let desktop_id = id.clone();
         html! {<aside class="inspector"><div class="inspector-heading"><span class="eyebrow">{"ORGANISM"}</span></div><h2>{display_name(&a)}</h2><code class="agent-id">{short(&id)}</code>{badge(s(&a,"state"))}<div class="inspector-divider"/>
         <div class="balance-label">{"可用能量"}</div><div class="balance-number">{amount(life(&a),"energy_available")}</div>
         <dl class="facts"><div><dt>{"剩余运行寿命"}</dt><dd>{lifetime(life(&a))}</dd></div><div><dt>{"最近心跳"}</dt><dd>{timestamp(life(&a),"last_heartbeat_at")}</dd></div></dl>
-        <button class="button primary full" onclick={ctx.link().callback(move|_|Msg::Navigate(Page::Agent(id.clone())))}>{"打开生物档案"}{icon("arrow")}</button></aside>}
+        <button class="button primary full" onclick={ctx.link().callback(move|_|Msg::Navigate(Page::Agent(id.clone())))}>{"打开生物档案"}{icon("arrow")}</button>
+        <button class="button full" onclick={ctx.link().batch_callback(move|_|vec![Msg::Navigate(Page::Agent(desktop_id.clone())),Msg::Tab("desktop".into())])}>{"桌面与对话"}{icon("arrow")}</button></aside>}
     }
     fn activity(&self, ctx: &Context<Self>) -> Html {
         let events = arr(&self.snapshot, "recent_events");

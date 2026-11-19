@@ -208,8 +208,8 @@ async fn real_youki_isolation_and_lifecycle() -> Result<()> {
             slot: 60000 + index,
             token: "integration-only-not-a-real-credential".into(),
             limits: survive_core::ResourceLimits {
-                memory_bytes: 256 * 1024 * 1024,
-                pids: 128,
+                memory_bytes: 512 * 1024 * 1024,
+                pids: 256,
                 cpu_millis: 1000,
             },
             network: survive_core::NetworkPolicy {
@@ -306,6 +306,10 @@ async fn real_youki_isolation_and_lifecycle() -> Result<()> {
         ensure!(
             read(&work.join(".survive-init-status.json"))?["exit_code"] == 42,
             "core exit not recorded"
+        );
+        ensure!(
+            read(&work.join(".survive-desktop-status.json"))?["state"] == "ready",
+            "desktop did not survive the core exit"
         );
         ensure!(
             manager.status(&s.agent_id).await? == SandboxStatus::Running,
@@ -424,7 +428,8 @@ async fn real_youki_isolation_and_lifecycle() -> Result<()> {
     );
     let result = request(&work, 2, json!({"action":"pids"})).await?;
     ensure!(
-        result["errno"] == libc::EAGAIN && result["children"].as_u64().unwrap() < 128,
+        result["errno"] == libc::EAGAIN
+            && result["children"].as_u64().unwrap() < u64::from(specs[0].limits.pids),
         "pids limit not enforced: {result}"
     );
     let result = request(&work, 3, json!({"action":"fill"})).await?;
@@ -464,7 +469,7 @@ async fn real_youki_isolation_and_lifecycle() -> Result<()> {
         );
     }
     drop(old_namespace);
-    until(|| work.join("restarted").exists(), 10).await?;
+    until(|| work.join("restarted").exists(), 65).await?;
     // OOM-group must stop the whole individual, including its init.
     fs::write(
         disabled.join("probe-request.json"),

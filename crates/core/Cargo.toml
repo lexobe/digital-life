@@ -5,6 +5,8 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+base64 = "0.22"
+imagesize = { version = "0.15", default-features = false, features = ["jpeg"] }
 anyhow.workspace = true
 libc.workspace = true
 redb.workspace = true

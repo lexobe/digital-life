@@ -11,13 +11,13 @@ fn threshold() -> f64 {
     0.9
 }
 fn memory() -> u64 {
-    256 * 1024 * 1024
+    768 * 1024 * 1024
 }
 fn pids() -> u32 {
-    64
+    384
 }
 fn cpu() -> u64 {
-    500
+    1000
 }
 fn yes() -> bool {
     true
@@ -94,7 +94,7 @@ pub struct EvidenceSource {
     pub event_secret_hash: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ResourceLimits {
     #[serde(default = "memory")]
     pub memory_bytes: u64,
@@ -113,7 +113,7 @@ impl Default for ResourceLimits {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct NetworkPolicy {
     #[serde(default = "yes")]
     pub internet: bool,

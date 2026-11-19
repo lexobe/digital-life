@@ -522,16 +522,19 @@ impl Inner {
             .ok_or(GatewayError::ModelNotAllowed)?;
         let agent = agent_id.to_owned();
         let model = logical_model.clone();
-        let allowed = self
+        let (allowed, environment) = self
             .db(move |store| match store.organism_profile(&agent) {
                 Ok(profile) => {
                     let env = store.environment(&profile.environment_id)?;
-                    Ok(env.permits_model(&profile.birth, &model))
+                    Ok((
+                        env.permits_model(&profile.birth, &model),
+                        Some(env.description),
+                    ))
                 }
                 Err(e) if e.to_string().starts_with("not_found:") => {
                     let experiment =
                         store.get_experiment(&store.get_agent(&agent)?.experiment_id)?;
-                    Ok(experiment.config.model == model)
+                    Ok((experiment.config.model == model, None))
                 }
                 Err(e) => Err(e),
             })
@@ -579,6 +582,26 @@ impl Inner {
                 "max_output_tokens"
             }
         };
+        if let Some(description) = environment {
+            let input_key = if protocol == Protocol::Responses {
+                "input"
+            } else {
+                "messages"
+            };
+            let input = obj.get_mut(input_key).expect("validated model input");
+            if input.is_string() {
+                *input = json!([{"role":"user","content":input.take()}]);
+            }
+            let messages = input.as_array_mut().expect("validated model input");
+            let environment_message = survive_core::environment_context_message(&description);
+            messages.retain(|m| m != &environment_message);
+            messages.insert(0, environment_message);
+            // Never let automatic provider truncation evict the first, required message.
+            if protocol == Protocol::Responses && obj.get("truncation").is_some_and(|v| v == "auto")
+            {
+                obj.insert("truncation".into(), json!("disabled"));
+            }
+        }
         let output = match obj.get(key) {
             None => self.config.default_output_tokens,
             Some(value) => value
@@ -692,13 +715,12 @@ impl Inner {
                 .checked_add(size)
                 .ok_or(invalid("Referenced context is too large."))?;
         }
-        let bytes = serde_json::to_vec(&request)
-            .map_err(|_| invalid("Invalid JSON request."))?
-            .len();
+        let (bytes, estimated_input) = survive_core::model_request_size(&request)
+            .map_err(|_| invalid("Invalid JSON request."))?;
         if bytes > self.config.max_request_bytes {
             return Err(invalid("Request exceeds the configured byte limit."));
         }
-        let input = (bytes as u64)
+        let input = estimated_input
             .checked_add(history)
             .ok_or(invalid("Input reservation overflow."))?
             .max(self.config.minimum_input_reservation);

@@ -62,7 +62,7 @@ impl Draft {
             Action::Birth(_) => {
                 fields = json!({
                     "count":"1","initial_energy":"50000","lifetime_seconds":"3600","default_model":"",
-                    "memory":"256","cpu_millis":"500","pids":"64","internet":true,"peers":true,"services":true,
+                    "memory":"768","cpu_millis":"1000","pids":"384","internet":true,"peers":true,"services":true,
                     "selected_slot":"1", "overrides":{}
                 })
             }

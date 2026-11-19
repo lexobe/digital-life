@@ -19,6 +19,8 @@ enum Page {
     Agent(String),
 }
 mod dashboard;
+mod desktop;
+mod dialogue;
 mod forms;
 mod organism;
 mod preview;
@@ -69,6 +71,7 @@ enum Msg {
     Token(String),
     Login,
     Logout,
+    Unauthorized,
     Refresh,
     ForRefresh(u64, Box<Msg>),
     Snapshot(Result<Value, String>),
@@ -239,6 +242,13 @@ fn date(v: u64) -> String {
         d.get_seconds()
     )
 }
+fn document_hidden() -> bool {
+    web_sys::window()
+        .unwrap_throw()
+        .document()
+        .unwrap_throw()
+        .hidden()
+}
 fn input_value(e: InputEvent) -> String {
     e.target_unchecked_into::<HtmlInputElement>().value()
 }
@@ -380,8 +390,9 @@ impl Component for App {
                     let _ = w.location().set_hash("");
                 }
             }
+            Msg::Unauthorized => self.report_error("401:凭据已失效，请重新连接。".into()),
             Msg::Refresh => {
-                if !self.loading && !self.demo && self.token.is_some() {
+                if !self.loading && !self.demo && self.token.is_some() && !document_hidden() {
                     self.fetch(ctx);
                 } else {
                     return false;
@@ -793,12 +804,18 @@ impl App {
             )
         });
     }
+    fn unauthorized(&self, ctx: &Context<Self>) -> Callback<()> {
+        let epoch = self.epoch;
+        ctx.link()
+            .callback(move |()| Msg::ForSession(epoch, Box::new(Msg::Unauthorized)))
+    }
     fn fetch_detail(&mut self, ctx: &Context<Self>) {
         self.detail_error = None;
         let Some(id) = self.selected.clone() else {
             return;
         };
-        if self.tab == "overview" {
+        if matches!(self.tab.as_str(), "overview" | "desktop") {
+            self.detail_loading = false;
             return;
         }
         self.detail_loading = true;

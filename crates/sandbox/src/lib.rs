@@ -1,6 +1,8 @@
 //! Rootful Linux youki backend. Construction is side-effect free; provisioning is explicit.
 //! The manager never starts a workload with missing isolation prerequisites.
 mod config;
+#[cfg(target_os = "linux")]
+mod desktop;
 mod init;
 mod manager;
 mod network;

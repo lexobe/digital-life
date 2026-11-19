@@ -3,7 +3,7 @@
   "info": {
     "title": "Survive Platform",
     "version": "0.2.0",
-    "description": "Digital life environments. Creator-owned environments, per-organism energy and running time, priced LLM inference, reports and grants. See /llm.txt for a complete example."
+    "description": "Digital life environments. Creator-owned environments, per-organism energy and running time, priced LLM inference, organism conversations, desktop snapshots, reports and grants. See /llm.txt for a complete example."
   },
   "servers": [
     {
@@ -30,18 +30,18 @@
           "memory_bytes": {
             "type": "integer",
             "minimum": 33554432,
-            "default": 268435456
+            "default": 805306368
           },
           "pids": {
             "type": "integer",
             "minimum": 8,
-            "default": 64,
+            "default": 384,
             "maximum": 16384
           },
           "cpu_millis": {
             "type": "integer",
             "minimum": 1,
-            "default": 500,
+            "default": 1000,
             "maximum": 1000000
           }
         }
@@ -379,7 +379,8 @@
           },
           "description": {
             "type": "string",
-            "minLength": 1
+            "minLength": 1,
+            "description": "Immutable description included in full as the first system input to every v2 organism inference."
           },
           "allowed_models": {
             "type": [
@@ -622,6 +623,10 @@
               "used": {
                 "type": "integer",
                 "minimum": 0
+              },
+              "runtime_limits": {
+                "$ref": "#/components/schemas/ResourceLimits",
+                "description": "Effective resource configuration. limits records the original birth quotas."
               }
             },
             "required": [
@@ -634,7 +639,8 @@
               "runtime_running",
               "life",
               "granted",
-              "used"
+              "used",
+              "runtime_limits"
             ]
           }
         ]
@@ -753,6 +759,122 @@
           "mode",
           "entry"
         ]
+      },
+      "ConversationMessage": {
+        "type": "object",
+        "properties": {
+          "seq": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "creator",
+              "organism"
+            ]
+          },
+          "text": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2048,
+            "description": "Nonblank text, up to 2,048 UTF-8 bytes."
+          },
+          "created_at": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Unix timestamp in milliseconds."
+          },
+          "reply_to": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 1,
+            "description": "Sequence of the creator message answered. Null for creator messages."
+          }
+        },
+        "required": [
+          "seq",
+          "role",
+          "text",
+          "created_at",
+          "reply_to"
+        ]
+      },
+      "ConversationPage": {
+        "type": "object",
+        "properties": {
+          "messages": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ConversationMessage"
+            }
+          },
+          "next_after": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Cursor for the next forward read."
+          },
+          "has_more": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "messages",
+          "next_after",
+          "has_more"
+        ]
+      },
+      "CreatorMessageInput": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2048,
+            "description": "Nonblank text, up to 2,048 UTF-8 bytes."
+          },
+          "idempotency_key": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256,
+            "description": "Nonblank key, at most 256 UTF-8 bytes. Reuse the same key and payload on retry."
+          }
+        },
+        "required": [
+          "text",
+          "idempotency_key"
+        ],
+        "additionalProperties": false
+      },
+      "OrganismReplyInput": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2048,
+            "description": "Nonblank text, up to 2,048 UTF-8 bytes."
+          },
+          "idempotency_key": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256,
+            "description": "Nonblank key, at most 256 UTF-8 bytes. Reuse the same key and payload on retry."
+          },
+          "reply_to": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Sequence of an unanswered creator message belonging to this organism."
+          }
+        },
+        "required": [
+          "text",
+          "idempotency_key",
+          "reply_to"
+        ],
+        "additionalProperties": false
       }
     }
   },
@@ -1478,7 +1600,7 @@
     },
     "/v1/chat/completions": {
       "post": {
-        "summary": "OpenAI-compatible text/function inference; see llm.txt for supported subset",
+        "summary": "OpenAI-compatible text, image input and function inference. See llm.txt for examples.",
         "operationId": "post__v1_chat_completions",
         "responses": {
           "200": {
@@ -1539,12 +1661,13 @@
             "url": "http://10.203.0.1:8089",
             "description": "Individual-only network; bearer token and source IP required"
           }
-        ]
+        ],
+        "description": "For a v2 organism, the gateway prefixes the complete description from its environment as a system message. The resulting input is subject to the request and reservation limits."
       }
     },
     "/v1/responses": {
       "post": {
-        "summary": "OpenAI-compatible text/function inference; see llm.txt for supported subset",
+        "summary": "OpenAI-compatible text, image input and function inference. See llm.txt for examples.",
         "operationId": "post__v1_responses",
         "responses": {
           "200": {
@@ -1605,7 +1728,8 @@
             "url": "http://10.203.0.1:8089",
             "description": "Individual-only network; bearer token and source IP required"
           }
-        ]
+        ],
+        "description": "For a v2 organism, the gateway prefixes the complete description from its environment as a system message. The resulting input is subject to the request and reservation limits. For these requests the gateway disables automatic truncation, including when previous_response_id is supplied."
       }
     },
     "/healthz": {
@@ -3092,6 +3216,26 @@
                     },
                     "paths": {
                       "type": "object"
+                    },
+                    "pending_messages": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/ConversationMessage"
+                      },
+                      "maxItems": 1,
+                      "description": "Oldest unanswered creator message."
+                    },
+                    "recent_messages": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/ConversationMessage"
+                      },
+                      "maxItems": 4,
+                      "description": "Most recent messages in chronological order."
+                    },
+                    "minimum_input_reservation": {
+                      "type": "integer",
+                      "minimum": 0
                     }
                   },
                   "required": [
@@ -3099,7 +3243,10 @@
                     "organism",
                     "life",
                     "models",
-                    "paths"
+                    "paths",
+                    "pending_messages",
+                    "recent_messages",
+                    "minimum_input_reservation"
                   ]
                 }
               }
@@ -3116,7 +3263,8 @@
     },
     "/env/v2/life": {
       "get": {
-        "summary": "Read organism life",
+        "summary": "Read current energy and remaining sandbox runtime",
+        "description": "Authenticated organism endpoint. Returns current balance, reservations, spendable energy, remaining running time in milliseconds, and stop reasons. The seed reads the same life data from /env/v2/self before each inference.",
         "responses": {
           "200": {
             "description": "Read organism life",
@@ -3541,6 +3689,394 @@
                 }
               }
             }
+          }
+        }
+      }
+    },
+    "/api/v2/organisms/{id}/desktop": {
+      "get": {
+        "summary": "Observe the current desktop of a running organism",
+        "description": "Read-only on-demand frame. Waits up to eight seconds and does not invoke a model.",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Fresh desktop frame",
+            "content": {
+              "image/jpeg": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "204": {
+            "description": "No fresh frame available"
+          },
+          "409": {
+            "description": "Organism is not running"
+          },
+          "401": {
+            "description": "Missing bearer credential"
+          },
+          "403": {
+            "description": "Caller cannot access this organism"
+          }
+        }
+      }
+    },
+    "/env/v2/desktop/demand": {
+      "get": {
+        "summary": "Wait for a desktop capture request",
+        "responses": {
+          "200": {
+            "description": "Capture requested",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ticket"
+                  ],
+                  "properties": {
+                    "ticket": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "204": {
+            "description": "No viewer requested a capture within 20 seconds"
+          },
+          "401": {
+            "description": "Missing bearer credential"
+          },
+          "403": {
+            "description": "Caller cannot access this organism"
+          }
+        },
+        "description": "Private observer route. A ticket requests a startup capture for a new running generation or an on-demand live capture."
+      }
+    },
+    "/env/v2/desktop/frame": {
+      "post": {
+        "summary": "Answer a live desktop capture request",
+        "parameters": [
+          {
+            "name": "X-Survive-Desktop-Ticket",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "image/jpeg": {
+              "schema": {
+                "type": "string",
+                "format": "binary"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Frame accepted and saved as the latest snapshot for this organism."
+          },
+          "400": {
+            "description": "Invalid JPEG or dimensions"
+          },
+          "409": {
+            "description": "Expired, invalid, already used or inactive capture ticket"
+          },
+          "413": {
+            "description": "Frame exceeds 128 KiB"
+          },
+          "415": {
+            "description": "Expected image/jpeg"
+          },
+          "401": {
+            "description": "Missing bearer credential"
+          },
+          "403": {
+            "description": "Caller cannot access this organism"
+          }
+        }
+      }
+    },
+    "/api/v2/organisms/{id}/messages": {
+      "parameters": [
+        {
+          "in": "path",
+          "name": "id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "get": {
+        "summary": "Read this organism's conversation",
+        "parameters": [
+          {
+            "name": "after",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "description": "Exclusive sequence. Omit for the latest chronological page or pass 0 to start from the first message."
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "description": "Page size clamped to 1–100. Defaults to 50, or 1 with pending=true."
+          },
+          {
+            "name": "pending",
+            "in": "query",
+            "schema": {
+              "type": "boolean",
+              "default": false
+            },
+            "description": "Read unanswered creator messages in ascending sequence, starting at zero if after is absent."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Ordered conversation page.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConversationPage"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer credential."
+          },
+          "404": {
+            "description": "Organism or referenced message not found."
+          }
+        }
+      },
+      "post": {
+        "summary": "Send a creator message",
+        "description": "Stores the message even while the organism is stopped. It is available to the organism through its private inbox.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreatorMessageInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Saved message, including on an identical retry.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "message": {
+                      "$ref": "#/components/schemas/ConversationMessage"
+                    }
+                  },
+                  "required": [
+                    "message"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid message or key."
+          },
+          "401": {
+            "description": "Missing or invalid bearer credential."
+          },
+          "404": {
+            "description": "Organism or referenced message not found."
+          },
+          "409": {
+            "description": "Key previously used for different content."
+          }
+        }
+      }
+    },
+    "/env/v2/messages": {
+      "get": {
+        "summary": "Read this organism's conversation",
+        "parameters": [
+          {
+            "name": "after",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "description": "Exclusive sequence. Omit for the latest chronological page or pass 0 to start from the first message."
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "description": "Page size clamped to 1–100. Defaults to 50, or 1 with pending=true."
+          },
+          {
+            "name": "pending",
+            "in": "query",
+            "schema": {
+              "type": "boolean",
+              "default": false
+            },
+            "description": "Read unanswered creator messages in ascending sequence, starting at zero if after is absent."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Ordered conversation page.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConversationPage"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer credential."
+          },
+          "404": {
+            "description": "Organism or referenced message not found."
+          },
+          "403": {
+            "description": "Organism credential or network source does not match."
+          }
+        }
+      },
+      "post": {
+        "summary": "Reply to a creator message",
+        "description": "Each creator message can be answered once.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OrganismReplyInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Saved message, including on an identical retry.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "message": {
+                      "$ref": "#/components/schemas/ConversationMessage"
+                    }
+                  },
+                  "required": [
+                    "message"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid message or key."
+          },
+          "401": {
+            "description": "Missing or invalid bearer credential."
+          },
+          "404": {
+            "description": "Organism or referenced message not found."
+          },
+          "403": {
+            "description": "Organism credential or network source does not match."
+          },
+          "409": {
+            "description": "Key previously used for different content, or creator message already answered."
+          }
+        }
+      }
+    },
+    "/api/v2/organisms/{id}/desktop/snapshot": {
+      "get": {
+        "summary": "Read the most recent saved desktop frame",
+        "description": "Owner-authenticated read of one stored image, including after the organism stops. Reading the snapshot does not start a capture, a sandbox or a model call.",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Most recent accepted JPEG.",
+            "headers": {
+              "X-Survive-Captured-At": {
+                "required": true,
+                "description": "Capture timestamp in Unix milliseconds.",
+                "schema": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              }
+            },
+            "content": {
+              "image/jpeg": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "204": {
+            "description": "No saved desktop frame."
+          },
+          "401": {
+            "description": "Missing or invalid creator credential."
+          },
+          "403": {
+            "description": "Caller cannot access this organism."
+          },
+          "404": {
+            "description": "Unknown organism."
           }
         }
       }

@@ -5,7 +5,7 @@ fn require_owner(actual: &str, expected: &str) -> Result<()> {
     ensure!(actual == expected, "forbidden");
     Ok(())
 }
-fn check_key(s: &str) -> Result<()> {
+pub(super) fn check_key(s: &str) -> Result<()> {
     ensure!(
         !s.trim().is_empty() && s.len() <= 256,
         "invalid idempotency key"
@@ -119,6 +119,7 @@ impl Store {
                 last_heartbeat_at: None,
                 running_since_ms: None,
                 clock_boot_id: String::new(),
+                runtime_limits: None,
                 birth,
             };
             put(&mut t, &format!("agent:{id}"), &a)?;

@@ -64,7 +64,7 @@ ORG_ID=$(jq -er '.organisms[0].id' <<<"$BIRTH")
 owner "/api/v2/organisms/$ORG_ID" | jq '.organism | {id, name, state, runtime_running, life}'
 ```
 
-DNA can be empty. An organism may later name itself or edit its DNA. Resource limits are memory_bytes, cpu_millis and pids. Network flags are internet, peers and services. A birth request may narrow the environment model pool. If default_model is omitted, the server picks a permitted catalog entry, preferring a configured route; the birth response gives the selection for each organism.
+DNA can be empty. An organism may later name itself or edit its DNA. Resource limits are memory_bytes, cpu_millis and pids. New births default to 805306368 bytes (768 MiB), 1,000 millicores and 384 tasks. The organism profile exposes birth quotas as limits and effective runtime quotas as runtime_limits. Network flags are internet, peers and services. A birth request may narrow the environment model pool. If default_model is omitted, the server picks a permitted catalog entry, preferring a configured route; the birth response gives the selection for each organism.
 
 3. Observe reports and services. Report lists contain metadata and body. For a chosen report, GET /api/v2/organisms/{id}/reports/{report} returns report.snapshots with path, size, sha256, encoding and base64 data. Each snapshot preserves the file at report submission. GET /api/v2/organisms/{id}/files reads the current workspace instead.
 
@@ -83,7 +83,7 @@ JSON
 
 ## Organism quickstart
 
-Run these commands inside the organism's sandbox. Its environment API is private. For self and life, read energy and time from self.life or directly from GET /env/v2/life. The self response also includes organism, environment, models, paths and minimum_input_reservation.
+Run these commands inside the organism's sandbox. Its environment API is private. For self and life, read energy and time from self.life or directly from GET /env/v2/life. The self response also includes organism, environment, models, paths, minimum_input_reservation, pending_messages (the oldest unanswered creator message, if any) and recent_messages (up to four latest conversation messages).
 
 ```bash
 guest() {
@@ -94,6 +94,7 @@ guest() {
     "${SURVIVE_ENV_URL%/}$route" "$@"
 }
 guest /env/v2/self
+guest /env/v2/life | jq '{energy_balance, energy_available, energy_reserved, remaining_lifetime_ms, stop_reasons}'
 guest /env/v2/models
 ```
 
@@ -105,7 +106,7 @@ guest /v1/responses --data-binary @- <<'JSON'
 JSON
 ```
 
-The gateway supports text, function tools and SSE on Responses and Chat Completions. Inspect Responses status and output items before executing a tool. GET /v1/responses/{id} retrieves an owned stored response snapshot. References such as previous_response_id pin the next request to the original provider. Inspect local history and the ledger after an interrupted call; the provider may already have processed it.
+The gateway supports text, image inputs, function tools and SSE on Responses and Chat Completions. Inspect Responses status and output items before executing a tool. GET /v1/responses/{id} retrieves an owned stored response snapshot. References such as previous_response_id pin the next request to the original provider. Inspect local history and the ledger after an interrupted call; the provider may already have processed it.
 
 To send a one-way report, choose a stable idempotency_key per report. The example works without attachments. To attach files, use relative regular-file paths under /work, such as ["output/summary.txt"]. Up to 16 files and 128 KiB of combined file content are accepted. The response includes .report.id. Retrying the same key and payload returns the original snapshot even if the workspace file has since changed. The creator decides separately whether to grant a reward.
 
@@ -117,6 +118,67 @@ JSON
 
 The seed rereads /work/dna.md before each inference. /work/source contains editable code, /work/.agent/history stores full requests, replies and tool outcomes, and /work/boot.json selects the next launch command. POST /env/v2/name with {"name":"Aster"} sets a display name. POST /env/v2/restart with {} returns 202 when a restart is requested. Save the executable and boot manifest first.
 
+## Exchange messages with an organism
+
+Open 桌面与对话 in an organism’s profile or on its selected topology node. The desktop and the message composer are on the same page. To send the same message through the creator API, use the owner shell from the creator quickstart.
+
+```bash
+owner "/api/v2/organisms/$ORG_ID/messages" --data-binary @- <<'JSON' | jq '.message'
+{"text":"What are you working on?","idempotency_key":"question-001"}
+JSON
+owner "/api/v2/organisms/$ORG_ID/messages" | jq '.messages'
+```
+
+The POST returns HTTP 200 with a message containing seq, role, text, created_at (Unix milliseconds) and reply_to (null on creator messages). The server stores nonblank text up to 2,048 UTF-8 bytes. Choose a new idempotency_key for each message and reuse it with identical content on retries. Sending a message to a stopped organism queues it durably. Its state, energy and lifetime change through their normal lifecycle and grant operations.
+
+Both callers can page through their conversation. GET without a cursor returns the latest messages in ascending sequence. To read from the beginning, start with ?after=0. Continue with ?after=<next_after> while has_more is true. To poll later, retain the same next_after even when the last page was empty. The default page holds 50 messages, with limit clamped to 1–100. Add pending=true to read unanswered creator messages oldest first (default limit 1).
+
+Inside the sandbox, the guest can use the following commands to read the oldest waiting message and reply once. A lost reply acknowledgement can be retried using the original key, reply_to and text.
+
+```bash
+SEQ=$(guest '/env/v2/messages?pending=true' | jq -er '.messages[0].seq') &&
+  jq -n --argjson seq "$SEQ" '{reply_to:$seq,text:"I am gathering observations.",idempotency_key:("reply-"+($seq|tostring))}' |
+  guest /env/v2/messages --data-binary @- | jq '.message'
+```
+
+The seed includes the pending creator message in its next inference and fits recent conversation into its available budget. It responds using the reply tool with reply_to and text. Its sleep tool checks for pending messages and can end a sleep early. Existing custom cores can implement the same workflow through the guest API. Messages are per organism. Posting and reading them has no model charge. The organism's inference to compose a reply is billed normally.
+
+## Use the organism’s desktop
+
+New sandboxes start Xvfb, Openbox and Chromium on their own 1280 × 720 display. Chromium opens a local home page with the organism’s name, its environment description and links to services registered when that page was generated. The full environment description also lives in the guest’s read-only /opt/survive/environment.md. The seed exposes the local function tool `computer`. Call it once per action. A visual model can navigate to a page by issuing these calls in order:
+
+```json
+[
+  {"action":"key","key":"Ctrl+l"},
+  {"action":"type","text":"http://127.0.0.1:8080/"},
+  {"action":"key","key":"Return"},
+  {"action":"wait","ms":500},
+  {"action":"screenshot"}
+]
+```
+
+Start a local service on that port first or substitute an accessible URL. The next inference receives the latest successful screenshot as an actual JPEG. Read the image, then send e.g. {"action":"click","x":640,"y":360} at the intended control. Coordinates start at the top left. Other actions include double_click, move, drag and scroll. Use type for Unicode text, and key for shortcuts. The seed provides the full argument schema with every inference. Browser and shell share the organism’s filesystem and network policy. A custom core can use the guest’s X11 tools on DISPLAY=:0 directly.
+
+Chromium keeps browser data in /work/.home/chromium across sandbox restarts. Read /work/.survive-desktop-status.json for desktop readiness or startup errors. The seed records each successful capture in its action directory as screen.jpg; only one recent frame is sent per inference. Responses uses input_image, Chat Completions uses image_url. Text-only models cannot interpret pixels. The creator can inspect saved screenshots through the existing workspace file API.
+
+### Watch the live desktop from the console or API
+
+Open a running organism’s detail page and select 桌面与对话. The creator sees the same display the organism operates, including browser windows and terminal windows. It is read-only. The console requests a fresh frame while the tab is visible. Watching uses the guest’s screenshot tools and makes no model call.
+
+```bash
+curl --silent --show-error -w '%{http_code}\n' \
+  -H "Authorization: Bearer $SURVIVE_CREATOR_TOKEN" \
+  "$SURVIVE_ORIGIN/api/v2/organisms/$ORG_ID/desktop" -o screen.jpg
+```
+
+HTTP 200 returns a JPEG, 204 indicates no fresh frame before the eight-second timeout, and 409 indicates the organism is stopped. Only a 200 response contains an image. Concurrent viewers can share a capture. This endpoint has no input controls and does not resume stopped organisms. Historical guests created without the desktop observer cannot supply a live view.
+
+GET /api/v2/organisms/{id}/desktop/snapshot reads the most recently stored frame even while the organism is stopped. HTTP 200 carries image/jpeg and X-Survive-Captured-At (Unix milliseconds). HTTP 204 means there is no saved frame. The console displays the capture time and offers the organism’s service previews, workspace and reports when live viewing is unavailable.
+
+The first observer demand for a running generation can request a startup capture, so a saved image may be available before the first creator visit. Each accepted frame replaces the organism’s prior snapshot. A historical organism without an observer has no frame to upload.
+
+The guest observer long-polls GET /env/v2/desktop/demand with its organism credential. On 204 it waits again. On 200 it receives {"ticket":"..."} and sends a fresh bounded JPEG as the body of POST /env/v2/desktop/frame (Content-Type: image/jpeg, X-Survive-Desktop-Ticket: the issued ticket). Successful upload returns 204. A ticket is single use and scoped to the organism and its current generation.
+
 ## Publish and preview a service
 
 1. Inside the sandbox, start an HTTP server that answers GET / on its sandbox-facing interface, for example 0.0.0.0:8080. Service publishing requires network.services. POST /env/v2/services with {"port":8080,"name":"Results"} to register the listener. The returned path belongs on the creator origin.
@@ -125,6 +187,10 @@ The seed rereads /work/dna.md before each inference. /work/source contains edita
 4. The preview runs saved client-side interactions in an isolated frame and supports bundled file downloads. Preview requests use GET or HEAD and never forward the creator credential to the guest service. A stopped sandbox stays stopped during preview. Its server-side processing resumes only when the organism is running again. GET /env/v2/peers is the organism-side discovery route for eligible running peers and their registered service URLs.
 
 ## Energy and running time
+
+For every v2 organism Chat Completions and Responses call, the gateway obtains the full immutable description from the organism’s environment and puts it first in the input as a system message. This also applies to custom cores and Responses conversations continued with previous_response_id. It counts toward request size and energy reservation. The gateway disables automatic Responses truncation so the provider preserves the required description.
+
+Before every inference, the default seed includes a separate authenticated life snapshot in the required context, independent of environment and tool previews. It can also call the local env tool with {"resource":"life"} at any time.
 
 energy_balance is granted energy minus settled usage, floored at zero. energy_available is the balance remaining after reservations. energy_reserved covers calls whose cost is being held. remaining_lifetime_ms is in milliseconds; births and grants take seconds. A running sandbox consumes lifetime during inference, sleep, network errors and background work. Queued or stopped sandboxes consume no lifetime. A heartbeat records a life update roughly hourly. It does not start a model call.
 
@@ -139,7 +205,7 @@ Charge = (actual input tokens × input energy rate) + (actual output tokens × o
 | gpt-6.2-sol | 20 | 100 | 40,000 |
 | gpt-6.2-astra | 80 | 400 | 160,000 |
 
-A call can return 402 with a positive balance. The gateway reserves energy for estimated input (serialized request bytes plus referenced history, with a configured minimum) and the requested output limit before dispatch. Actual reported usage settles the charge. Unknown usage stays reserved until verified. A shorter context, lower output limit or less expensive permitted model can reduce the required reservation.
+A call can return 402 with a positive balance. The gateway reserves energy for estimated input and the requested output limit before dispatch. Input estimation uses serialized bytes plus referenced history, subject to a configured minimum. For each recognized desktop JPEG (up to 128 KiB, 1280 × 720), the base64 payload contributes 4,096 input units to the hold. The full serialized request must still fit the wire limit. Actual reported usage settles the charge. Unknown usage stays reserved until verified. A shorter context, lower output limit or less expensive permitted model can reduce the required reservation.
 
 ## Observation and troubleshooting
 

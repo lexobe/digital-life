@@ -193,6 +193,8 @@ pub struct OrganismProfile {
     pub owner: String,
     pub name: String,
     pub birth: BirthTraits,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime_limits: Option<ResourceLimits>,
     pub created_at: u64,
     pub remaining_lifetime_ms: u64,
     pub last_heartbeat_at: Option<u64>,
@@ -200,6 +202,9 @@ pub struct OrganismProfile {
     pub clock_boot_id: String,
 }
 impl OrganismProfile {
+    pub fn effective_limits(&self) -> &ResourceLimits {
+        self.runtime_limits.as_ref().unwrap_or(&self.birth.limits)
+    }
     pub fn remaining_at(&self, boot: &str, mono: u64) -> u64 {
         let elapsed = self
             .running_since_ms
@@ -274,6 +279,31 @@ pub struct LifeReport {
     #[serde(flatten)]
     pub input: ReportInput,
     pub snapshots: serde_json::Value,
+}
+
+pub const MESSAGE_TEXT_MAX_BYTES: usize = 2048;
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum MessageRole {
+    Creator,
+    Organism,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ConversationMessage {
+    pub seq: u64,
+    pub role: MessageRole,
+    pub text: String,
+    pub created_at: u64,
+    pub reply_to: Option<u64>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct MessagePage {
+    pub messages: Vec<ConversationMessage>,
+    pub next_after: u64,
+    pub has_more: bool,
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]

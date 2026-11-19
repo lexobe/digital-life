@@ -19,6 +19,10 @@ fn batch_form_defaults_and_overrides_resolve_through_core() {
     d.fields["overrides"] = json!({"2":{"dna_mode":"custom","dna":"act","default_model":"long","lifetime_seconds":"30","initial_energy":"800","internet":"false","pids":"32"}});
     let batch: survive_core::BirthBatch = serde_json::from_value(d.payload().unwrap()).unwrap();
     let births = batch.resolve().unwrap();
+    assert_eq!(
+        json!(births[0].limits),
+        json!(survive_core::ResourceLimits::default())
+    );
     assert_eq!(births[0].initial_energy, 50000);
     assert_eq!(births[1].initial_energy, 800);
     assert_eq!(births[1].lifetime_seconds, 30);

@@ -1,3 +1,5 @@
+mod conversation;
+mod desktop_upgrade;
 mod life_store;
 use crate::*;
 use anyhow::{Context, Result, ensure};

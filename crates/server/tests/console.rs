@@ -20,6 +20,7 @@ fn fixture(data: &std::path::Path, assets: Option<&std::path::Path>) -> App {
     })).unwrap();
     let store = Store::open(data.join("console.redb")).unwrap();
     App(Arc::new(Inner {
+        desktop: Default::default(),
         gateway: Gateway::new(config.gateway.clone(), store.clone()).unwrap(),
         config,
         store,
@@ -670,4 +671,112 @@ async fn public_guide_links_and_authenticated_examples_use_configured_origin() {
         assert!(text.contains("export SURVIVE_ORIGIN=\"https://creator.example:9443\""));
         assert!(!text.contains("untrusted.example"));
     }
+}
+
+#[tokio::test]
+async fn desktop_frames_require_the_owner_and_a_matching_one_time_guest_ticket() {
+    let temp = tempfile::tempdir().unwrap();
+    let app = fixture(temp.path(), None);
+    let (_, local) = app
+        .0
+        .store
+        .create_experiment("owner", experiment("local", 1))
+        .unwrap();
+    let (_, foreign) = app
+        .0
+        .store
+        .create_experiment("other", experiment("foreign", 1))
+        .unwrap();
+    let (individual, token) = &local[0];
+    let path = format!("/api/v2/organisms/{}/desktop", individual.id);
+    assert_eq!(get(&app, &path, false).await.0, StatusCode::UNAUTHORIZED);
+    assert_eq!(get(&app, &path, true).await.0, StatusCode::CONFLICT);
+    assert_eq!(
+        get(
+            &app,
+            &format!("/api/v2/organisms/{}/desktop", foreign[0].0.id),
+            true
+        )
+        .await
+        .0,
+        StatusCode::FORBIDDEN
+    );
+    for (agent, _) in local.iter().chain(&foreign) {
+        app.0
+            .store
+            .set_agent_state(&agent.id, survive_core::AgentState::Running, None)
+            .unwrap();
+    }
+    let guest = |uri: &str, token: &str| {
+        Request::builder()
+            .uri(uri)
+            .header("authorization", format!("Bearer {token}"))
+            .extension(axum::extract::ConnectInfo(
+                "127.0.0.1:1234".parse::<std::net::SocketAddr>().unwrap(),
+            ))
+    };
+    let owner_app = app.clone();
+    let viewer = tokio::spawn(async move { get(&owner_app, &path, true).await });
+    let reply = api::environment_router(app.clone())
+        .oneshot(
+            guest("/env/v2/desktop/demand", token)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(reply.status(), StatusCode::OK);
+    let offer: Value =
+        serde_json::from_slice(&to_bytes(reply.into_body(), 1024).await.unwrap()).unwrap();
+    let ticket = offer["ticket"].as_str().unwrap();
+    let jpeg = include_bytes!("../../agent/tests/fixtures/screen.jpg").as_slice();
+    let upload = |token: &str, ticket: &str, bytes: &'static [u8]| {
+        api::environment_router(app.clone()).oneshot(
+            guest("/env/v2/desktop/frame", token)
+                .method("POST")
+                .header("content-type", "image/jpeg")
+                .header("x-survive-desktop-ticket", ticket)
+                .body(Body::from(bytes))
+                .unwrap(),
+        )
+    };
+    assert_eq!(
+        upload(&foreign[0].1, ticket, jpeg).await.unwrap().status(),
+        StatusCode::CONFLICT
+    );
+    assert_eq!(
+        upload(token, "stale", jpeg).await.unwrap().status(),
+        StatusCode::CONFLICT
+    );
+    assert_eq!(
+        upload(token, ticket, b"invalid").await.unwrap().status(),
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(
+        upload(token, ticket, jpeg).await.unwrap().status(),
+        StatusCode::NO_CONTENT
+    );
+    let (status, image) = viewer.await.unwrap();
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(image, jpeg);
+    app.0
+        .store
+        .set_agent_state(&individual.id, survive_core::AgentState::Suspended, None)
+        .unwrap();
+    let saved = format!("/api/v2/organisms/{}/desktop/snapshot", individual.id);
+    assert_eq!(get(&app, &saved, false).await.0, StatusCode::UNAUTHORIZED);
+    assert_eq!(
+        get(&app, &saved, true).await,
+        (StatusCode::OK, jpeg.to_vec())
+    );
+    app.0
+        .store
+        .set_agent_state(&individual.id, survive_core::AgentState::Running, None)
+        .unwrap();
+
+    assert_eq!(
+        upload(token, ticket, jpeg).await.unwrap().status(),
+        StatusCode::CONFLICT
+    );
+    assert!(app.0.store.reservations(&individual.id).unwrap().is_empty());
 }

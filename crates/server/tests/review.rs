@@ -53,6 +53,7 @@ fn app(data: &Path, source: Option<&Path>) -> App {
     // Construct with synthetic credentials so the tests never read actual keys
     // or mutate the process-global environment.
     App(Arc::new(Inner {
+        desktop: Default::default(),
         config,
         store,
         gateway,

@@ -20,6 +20,10 @@ pub(super) fn owner_routes() -> Router<App> {
         .route("/api/v2/organisms/{id}/grants", get(grants).post(grant))
         .route("/api/v2/organisms/{id}/reports", get(reports))
         .route(
+            "/api/v2/organisms/{id}/messages",
+            get(messages).post(send_creator_message),
+        )
+        .route(
             "/api/v2/organisms/{id}/reports/{report}",
             get(report_detail),
         )
@@ -35,6 +39,10 @@ pub(super) fn guest_routes() -> Router<App> {
         .route("/env/v2/life", get(guest_life))
         .route("/env/v2/name", post(rename))
         .route("/env/v2/reports", post(send_report).get(guest_reports))
+        .route(
+            "/env/v2/messages",
+            get(guest_messages).post(reply_to_message),
+        )
         .route("/env/v2/models", get(guest_models))
         .route("/env/v2/events", get(self_events))
         .route("/env/v2/events/{id}", get(self_event_detail))
@@ -47,6 +55,7 @@ fn projection(a: &Agent, p: &OrganismProfile, l: &LifeState) -> Value {
     let mut v = json!(p.birth);
     let obj = v.as_object_mut().expect("birth traits are an object");
     obj.extend(json!(l).as_object().unwrap().clone());
+    obj.insert("runtime_limits".into(), json!(p.effective_limits()));
     obj.extend(json!({"id":a.id,"environment_id":p.environment_id,"owner":p.owner,"name":p.name,
         "created_at":p.created_at,"slot":a.slot,"generation":a.generation,"state":a.state,"last_error":a.last_error,
         "runtime_running":p.running_since_ms.is_some(),"life":l,"granted":a.granted,"used":a.used}).as_object().unwrap().clone());
@@ -453,19 +462,109 @@ async fn guest_self(
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
 ) -> Result<Json<Value>, ApiError> {
     let a = environment_agent(&app, &h, peer).await?;
-    let (p, l, e) = app
+    let (p, l, e, (pending, recent)) = app
         .db({
             let id = a.id.clone();
             move |s| {
                 let p = s.organism_profile(&id)?;
                 let e = s.environment(&p.environment_id)?;
-                Ok((p, s.life_state(&id)?, e))
+                Ok((p, s.life_state(&id)?, e, s.message_context(&id)?))
             }
         })
         .await?;
     Ok(Json(
-        json!({"organism":projection(&a,&p,&l),"life":l,"environment":e,"minimum_input_reservation":app.0.config.gateway.minimum_input_reservation,"models":app.0.gateway.organism_catalog(&e, &p.birth),"paths":{"dna":"/work/dna.md","model":"/work/model.txt","source":"/work/source","boot":"/work/boot.json"}}),
+        json!({"organism":projection(&a,&p,&l),"life":l,"environment":e,
+            "pending_messages":pending,"recent_messages":recent,
+            "minimum_input_reservation":app.0.config.gateway.minimum_input_reservation,"models":app.0.gateway.organism_catalog(&e, &p.birth),"paths":{"environment":"/opt/survive/environment.md","dna":"/work/dna.md","model":"/work/model.txt","source":"/work/source","boot":"/work/boot.json"}}),
     ))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct MessageQuery {
+    after: Option<u64>,
+    limit: Option<usize>,
+    #[serde(default)]
+    pending: bool,
+}
+
+impl MessageQuery {
+    fn page(&self, store: &Store, id: &str) -> anyhow::Result<MessagePage> {
+        let default_limit = if self.pending { 1 } else { 50 };
+        store.messages(
+            id,
+            self.after,
+            self.limit.unwrap_or(default_limit),
+            self.pending,
+        )
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CreatorMessageInput {
+    text: String,
+    idempotency_key: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ReplyInput {
+    text: String,
+    reply_to: u64,
+    idempotency_key: String,
+}
+
+async fn messages(
+    State(app): State<App>,
+    h: HeaderMap,
+    Path(id): Path<String>,
+    Query(query): Query<MessageQuery>,
+) -> Result<Json<MessagePage>, ApiError> {
+    let who = owner(&app, &h)?;
+    Ok(Json(
+        app.db(move |s| {
+            owner_profile(&s, &who, &id)?;
+            query.page(&s, &id)
+        })
+        .await?,
+    ))
+}
+
+async fn guest_messages(
+    State(app): State<App>,
+    h: HeaderMap,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    Query(query): Query<MessageQuery>,
+) -> Result<Json<MessagePage>, ApiError> {
+    let a = environment_agent(&app, &h, peer).await?;
+    Ok(Json(app.db(move |s| query.page(&s, &a.id)).await?))
+}
+
+async fn send_creator_message(
+    State(app): State<App>,
+    h: HeaderMap,
+    Path(id): Path<String>,
+    Json(input): Json<CreatorMessageInput>,
+) -> Result<Json<Value>, ApiError> {
+    let who = owner(&app, &h)?;
+    let message = app
+        .db(move |s| s.send_creator_message(&who, &id, input.text, &input.idempotency_key))
+        .await?;
+    Ok(Json(json!({ "message": message })))
+}
+
+async fn reply_to_message(
+    State(app): State<App>,
+    h: HeaderMap,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    Json(input): Json<ReplyInput>,
+) -> Result<Json<Value>, ApiError> {
+    let a = environment_agent(&app, &h, peer).await?;
+    let message = app
+        .db(move |s| s.reply_to_message(&a.id, input.reply_to, input.text, &input.idempotency_key))
+        .await?;
+    Ok(Json(json!({ "message": message })))
 }
 async fn guest_life(
     State(app): State<App>,

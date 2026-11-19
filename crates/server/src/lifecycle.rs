@@ -13,7 +13,28 @@ pub async fn seed_organism(
     let dna = profile.birth.dna.clone();
     let default_model = profile.birth.default_model.clone();
     let source = app.0.config.source_dir.clone();
+    let environment_id = profile.environment_id.clone();
+    let id = agent.id.clone();
+    let (description, services) = app
+        .db(move |store| {
+            Ok((
+                store.environment(&environment_id)?.description,
+                store.services(&id)?,
+            ))
+        })
+        .await?;
+    let name = if profile.name.is_empty() {
+        format!("生物 {}", agent.slot)
+    } else {
+        profile.name.clone()
+    };
     tokio::task::spawn_blocking(move || -> Result<()> {
+        // Assets live on a host-owned, read-only guest mount and survive custom boot programs.
+        let assets = root.join("assets");
+        std::fs::create_dir_all(&assets)?;
+        write_asset(&assets, "environment.md", description.as_bytes())?;
+        let home = desktop_home(&name, &description, &services);
+        write_asset(&assets, "home.html", home.as_bytes())?;
         if root.join("seeded").exists() {
             return Ok(());
         }
@@ -56,6 +77,63 @@ pub async fn seed_organism(
     .await
     .map_err(|e| ApiError::internal(e.to_string()))?
     .map_err(ApiError::from)
+}
+fn write_asset(parent: &Path, name: &str, bytes: &[u8]) -> Result<()> {
+    use std::io::Write;
+    let path = parent.join(name);
+    if std::fs::read(&path).ok().as_deref() == Some(bytes) {
+        return Ok(());
+    }
+    let mut file = tempfile::NamedTempFile::new_in(parent)?;
+    file.write_all(bytes)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        file.as_file()
+            .set_permissions(std::fs::Permissions::from_mode(0o444))?;
+    }
+    file.as_file().sync_all()?;
+    file.persist(path)?;
+    std::fs::File::open(parent)?.sync_all()?;
+    Ok(())
+}
+fn desktop_home(name: &str, environment: &str, services: &[ServiceRegistration]) -> String {
+    fn text(s: &str) -> String {
+        s.replace('&', "&amp;")
+            .replace('<', "&lt;")
+            .replace('>', "&gt;")
+    }
+    let mut links = String::new();
+    if !services.is_empty() {
+        links.push_str("<h2>已登记的本地服务</h2><ul>");
+        for s in services {
+            links.push_str(&format!(
+                "<li><a href=\"http://127.0.0.1:{}/\">{}</a></li>",
+                s.port,
+                text(&s.name)
+            ));
+        }
+        links.push_str("</ul>");
+    }
+    let (prefix, rest) = include_str!("desktop-home.html")
+        .split_once("{name}")
+        .expect("home title placeholder");
+    let (before_env, rest) = rest
+        .split_once("{description}")
+        .expect("home description placeholder");
+    let (before_services, end) = rest
+        .split_once("{services}")
+        .expect("home services placeholder");
+    [
+        prefix,
+        &text(name),
+        before_env,
+        &text(environment),
+        before_services,
+        &links,
+        end,
+    ]
+    .concat()
 }
 fn copy_tree(source: &Path, destination: &Path) -> Result<()> {
     std::fs::create_dir_all(destination)?;
@@ -196,7 +274,7 @@ pub async fn tick(app: &App) -> Result<(), ApiError> {
             continue;
         }
         if running {
-            memory = memory.saturating_add(sandbox.memory_reservation(&p.birth.limits));
+            memory = memory.saturating_add(sandbox.memory_reservation(p.effective_limits()));
         }
         let id = p.id.clone();
         let a = app.db(move |s| s.get_agent(&id)).await?;
@@ -216,7 +294,7 @@ pub async fn tick(app: &App) -> Result<(), ApiError> {
             }
             if started >= 2
                 || agent.available() == 0
-                || memory.saturating_add(sandbox.memory_reservation(&profile.birth.limits))
+                || memory.saturating_add(sandbox.memory_reservation(profile.effective_limits()))
                     > app.0.config.sandbox.as_ref().unwrap().total_memory_bytes
             {
                 continue;
@@ -234,7 +312,7 @@ pub async fn tick(app: &App) -> Result<(), ApiError> {
                 experiment_id: profile.environment_id.clone(),
                 slot: agent.slot,
                 token,
-                limits: profile.birth.limits.clone(),
+                limits: profile.effective_limits().clone(),
                 network: profile.birth.network.clone(),
             };
             let id = agent.id.clone();
@@ -251,7 +329,7 @@ pub async fn tick(app: &App) -> Result<(), ApiError> {
                     checkpoint(app, &id, true).await?;
                     app.db(move |s| s.set_agent_state(&id, AgentState::Running, None))
                         .await?;
-                    memory += sandbox.memory_reservation(&profile.birth.limits);
+                    memory += sandbox.memory_reservation(profile.effective_limits());
                     started += 1;
                 }
                 Err(error) => {

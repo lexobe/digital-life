@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context, Result, ensure};
 use clap::Parser;
 use survive_server::{App, api, config::Config, lifecycle};
 
@@ -18,6 +18,9 @@ struct Args {
     /// Export only the sandbox table as TOML; does not open state or credentials.
     #[arg(long)]
     export_sandbox: bool,
+    /// Finalize prepared desktop limits for one stopped individual while the service is offline.
+    #[arg(long, value_name = "ID", conflicts_with_all = ["check", "export_sandbox"])]
+    finish_desktop_upgrade: Option<String>,
 }
 fn main() -> Result<()> {
     let mut args = Args::parse();
@@ -57,6 +60,32 @@ async fn run(args: Args) -> Result<()> {
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("sandbox configuration missing"))?;
         print!("{}", toml::to_string(sandbox)?);
+        return Ok(());
+    }
+    if let Some(id) = args.finish_desktop_upgrade {
+        let sandbox = config.sandbox.context("sandbox configuration missing")?;
+        ensure!(
+            sandbox.data_dir == config.data_dir,
+            "sandbox.data_dir must equal data_dir"
+        );
+        let manager = survive_sandbox::SandboxManager::new(sandbox)?;
+        let path = config.data_dir.join("platform.redb");
+        ensure!(path.is_file(), "existing platform database required");
+        let store = survive_core::Store::open(path)
+            .context("open database exclusively for offline upgrade")?;
+        let state = manager
+            .with_stopped_spec(&id, move |spec| {
+                store.upgrade_desktop_limits(
+                    &spec.agent_id,
+                    &spec.experiment_id,
+                    spec.slot,
+                    &survive_core::token_hash(&spec.token),
+                    &spec.network,
+                    &spec.limits,
+                )
+            })
+            .await?;
+        tracing::info!(organism = %id, ?state, "desktop upgrade finalized");
         return Ok(());
     }
     let app = App::new(config)?;

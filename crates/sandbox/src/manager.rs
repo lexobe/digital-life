@@ -74,6 +74,36 @@ impl SandboxManager {
         })
         .await?
     }
+    /// Keep other sandbox operations excluded while an offline operator commits
+    /// maintenance metadata for a verified, stopped individual.
+    pub async fn with_stopped_spec<T: Send + 'static>(
+        &self,
+        id: &str,
+        apply: impl FnOnce(&SandboxSpec) -> Result<T> + Send + 'static,
+    ) -> Result<T> {
+        identifier(id)?;
+        let this = self.clone();
+        let id = id.to_owned();
+        tokio::task::spawn_blocking(move || {
+            let _lock = this.lock()?;
+            ensure!(
+                this.status_sync(&id)? == SandboxStatus::Stopped,
+                "sandbox must be stopped"
+            );
+            let spec = this.spec(&id)?;
+            let cgroup = this.cgroup(&spec);
+            if cgroup.try_exists()? {
+                ensure!(
+                    system::text(&cgroup.join("cgroup.events"))?
+                        .lines()
+                        .any(|l| l == "populated 0"),
+                    "stopped sandbox cgroup must be empty"
+                );
+            }
+            apply(&spec)
+        })
+        .await?
+    }
     /// Read all prepared individuals under one installation lock. Youki 0.7's
     /// `list` command emits a human table and does not refresh process state, so
     /// use the authoritative state operation for extant runtime records. Stopped
@@ -278,6 +308,13 @@ impl SandboxManager {
             "/usr/bin/rustc",
             "/usr/bin/python3",
             "/usr/bin/curl",
+            "/usr/bin/Xvfb",
+            "/usr/bin/openbox",
+            "/usr/bin/chromium",
+            "/usr/bin/xdotool",
+            "/usr/bin/xclip",
+            "/usr/bin/scrot",
+            "/usr/bin/xterm",
         ] {
             ensure!(
                 rootfs_path(&self.config.rootfs, Path::new(path)).is_ok(),
@@ -840,6 +877,11 @@ impl SandboxManager {
                 dir.join("prepared").is_file(),
                 "incomplete prepare retained; inspect manually, no automatic rollback"
             );
+            // Only the platform-owned seed executable follows platform updates. A custom
+            // boot entry, writable sources and journal remain under the organism's control.
+            if self.status_sync(&spec.agent_id)? == SandboxStatus::Stopped {
+                refresh_platform_seed(&self.config.agent_binary, &dir.join("assets"))?;
+            }
             return Ok(());
         }
         ensure!(
@@ -879,7 +921,7 @@ impl SandboxManager {
         // data where supported. Shift the private lower tree before exposure;
         // ownership preserves non-root package users inside the UID namespace.
         let template = format!("{}/.", self.config.rootfs.display());
-        self.command(
+        system::command(
             "cp",
             &[
                 "-a",
@@ -887,8 +929,12 @@ impl SandboxManager {
                 &template,
                 dir.join("lower").to_str().unwrap(),
             ],
+            // ext4 must physically copy the entire desktop template at birth.
+            self.timeout().max(180),
         )?;
         scaffold(&dir.join("lower"))?;
+        #[cfg(unix)]
+        install_guest_hosts(&dir, &spec.hostname())?;
         system::shift_tree(&dir.join("lower"), spec.uid(&self.config))?;
         let resolv = self
             .config
@@ -990,6 +1036,14 @@ impl SandboxManager {
             ],
         )?;
         shift_seed(&dir.join("storage/work"), spec.uid(&self.config))?;
+        // The guest browser runs as nobody. It needs search permission to reach
+        // its own home under /work. Parent host staging remains slot-private.
+        #[cfg(unix)]
+        {
+            let work = dir.join("storage/work");
+            let mode = fs::metadata(&work)?.mode() & 0o7777;
+            fs::set_permissions(work, fs::Permissions::from_mode(mode | 0o001))?;
+        }
         self.mount_storage(spec)
     }
     fn mount_storage(&self, spec: &SandboxSpec) -> Result<()> {
@@ -1567,6 +1621,45 @@ fn boot_id() -> Result<String> {
     system::text(Path::new("/proc/sys/kernel/random/boot_id"))
 }
 
+#[cfg(unix)]
+fn install_guest_hosts(dir: &Path, hostname: &str) -> Result<()> {
+    // Xlib and local servers may look up the guest hostname before accepting
+    // connections. These local names must resolve even with egress disabled.
+    let asset = dir.join("assets/hosts");
+    let hosts = format!("127.0.0.1\tlocalhost\n127.0.1.1\t{hostname}\n");
+    system::atomic_write(&asset, hosts.as_bytes())?;
+    fs::set_permissions(&asset, fs::Permissions::from_mode(0o444))?;
+    // scaffold checked the parent, and the new private lower has never run.
+    // Unlink template symlinks themselves, never write through their targets.
+    let path = dir.join("lower/etc/hosts");
+    match fs::remove_file(&path) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(e.into()),
+    }
+    std::os::unix::fs::symlink("/opt/survive/hosts", path)?;
+    Ok(())
+}
+
+fn refresh_platform_seed(source: &Path, assets: &Path) -> Result<()> {
+    system::trusted(assets)?;
+    let destination = assets.join("survive-agent");
+    system::trusted(&destination)?;
+    let contents = fs::read(source)?;
+    if fs::read(&destination)? == contents {
+        return Ok(());
+    }
+    let mut staged = tempfile::NamedTempFile::new_in(assets)?;
+    std::io::Write::write_all(staged.as_file_mut(), &contents)?;
+    #[cfg(unix)]
+    staged
+        .as_file()
+        .set_permissions(fs::Permissions::from_mode(0o555))?;
+    staged.as_file().sync_all()?;
+    staged.persist(destination)?;
+    fs::File::open(assets)?.sync_all()?;
+    Ok(())
+}
 fn scaffold(root: &Path) -> Result<()> {
     for name in [
         "proc",
@@ -1708,6 +1801,31 @@ fn shift_seed(path: &Path, base: u32) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
+    #[test]
+    fn local_guest_names_do_not_depend_on_dns_or_follow_template_hosts_links() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        fs::create_dir_all(dir.join("lower/etc")).unwrap();
+        fs::create_dir(dir.join("assets")).unwrap();
+        let original = dir.join("template");
+        fs::write(&original, "preserve").unwrap();
+        let hosts = dir.join("lower/etc/hosts");
+        std::os::unix::fs::symlink(&original, &hosts).unwrap();
+        install_guest_hosts(dir, "agent-47").unwrap();
+        let asset = dir.join("assets/hosts");
+        assert_eq!(
+            fs::read_to_string(&asset).unwrap(),
+            "127.0.0.1\tlocalhost\n127.0.1.1\tagent-47\n"
+        );
+        assert_eq!(fs::metadata(asset).unwrap().mode() & 0o777, 0o444);
+        assert_eq!(
+            fs::read_link(hosts).unwrap(),
+            Path::new("/opt/survive/hosts")
+        );
+        assert_eq!(fs::read_to_string(original).unwrap(), "preserve");
+    }
+
     #[test]
     fn absent_link_requires_valid_router_query_output() {
         assert!(!has_named_link(r#"[{"ifname":"lo"},{"ifname":"uplink"}]"#, "sa1").unwrap());

@@ -35,6 +35,10 @@ Each individual has a fully preallocated `storage.ext4` image of `disk_bytes` (d
 
 The trusted rootfs is copied once per agent (reflink where available), its ownership shifted, and mounted as an OverlayFS lower layer. The upper layer survives stop/start and reboot restore. `/work` also persists. `/tmp`, `/run`, `/dev` and `/dev/shm` are bounded tmpfs mounts charged to the memory cgroup. Workload stdout/stderr/stdin are `/dev/null`; trusted init closes all inherited descriptors above 2 before reading mutable boot state or spawning the core. Agent history and diagnostics should be written under `/work`.
 
+During first preparation, the trusted template copy receives at least 180 seconds to accommodate a full disk copy on ext4. Runtime, network and other administrative commands use `command_timeout_secs`.
+
+Each new individual's `/etc/hosts` points to its read-only `/opt/survive/hosts` asset. The file resolves `localhost` and the individual's own `agent-<slot>` hostname to loopback. This keeps X11 clients and local HTTP servers usable when Internet access is disabled.
+
 Runtime errors use youki `--log` with a private FIFO. The manager drains it and retains at most 64 KiB per operation in root-owned mode-0600 `agents/<id>/youki-{create,start,state,kill,delete}.log`; repeating an operation replaces its previous log. Errors include up to 16 KiB of retained diagnostics. The create capture stays alive through paused-init wiring and start. No workload file-size rlimit is changed, and youki never receives a descriptor to the regular host log file.
 
 `/opt/survive` is a read-only mount of the configured init and agent binaries; `/opt/survive/survive-agent` always exists. Mutable boot argv may select a rebuilt executable under `/work`. Environment includes:
@@ -46,12 +50,28 @@ SURVIVE_WORK_DIR=/work
 HOME=/work/.home
 CARGO_HOME=/work/.cargo
 RUSTUP_HOME=/usr/local/rustup
+DISPLAY=:0
+XDG_RUNTIME_DIR=/run/survive-desktop
 PATH=/usr/local/cargo/bin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 ```
 
 Cargo/rustc, C build tools, curl, Python and package tools are available from the rootfs. Agents can install dependencies into their own rootfs/workspace within limits. Capabilities are limited to filesystem ownership, local UID/GID switching, chroot, signaling and low port binding; namespace/admin/raw-network capabilities are absent. Seccomp denies privileged operations and additional user/network namespaces while allowing normal compiler processes and threads. `clone3` returns ENOSYS for libc fallback; classic clone flags below `CLONE_NEWCGROUP` permit threads, while `CLONE_NEWNS` still requires the absent `CAP_SYS_ADMIN`. The remaining namespace flags are outside the allowed range.
 
 Each cgroup enforces `memory.max`, zero swap, `memory.oom.group=1`, `pids.max`, and a 100 ms CPU quota period. `/survive` enforces `total_memory_bytes` across agents. The control server belongs outside that hierarchy. No cgroup filesystem or host socket is exposed inside an individual.
+
+## Personal desktop
+
+On each sandbox start, PID 1 starts Xvfb on display `:0` at 1280 × 720, starts Openbox and opens a maximized Chromium window. Seeded guests open the read-only `/opt/survive/home.html` with their environment and registered local service links. It checks the X display, window manager and mapped browser window before launching the mutable core. Each readiness check has a 20-second limit. A desktop startup failure is recorded and the core still launches, so recovery code can inspect the guest. PID 1 reaps the desktop processes along with the other children. Closing a window or terminating a desktop process is an organism action and does not trigger an automatic restart.
+
+Desktop programs use the guest X11 socket under its private `/tmp`. Xvfb disables TCP and the MIT-SHM extension. Chromium uses software rendering and the sandbox network policy. No VNC, browser debugging port, host display or GPU device is needed. `xdotool`, `xclip`, `scrot` and `xterm` are available inside the individual. For example, `scrot -z -o /work/screen.png` captures the current screen and `xdotool getactivewindow getwindowname` reports the focused window title.
+
+Chromium runs as guest UID/GID 65534 with zero effective capabilities. Desktop processes start without `SURVIVE_TOKEN` in their environments. The browser owns its mode-0700 home and persistent profile at `/work/.home/chromium`; its runtime directory is on `/run`. New workspaces allow directory traversal to reach that profile. The host staging directory retains its mapped-group restriction. The outer sandbox denies the setuid elevation and nested user namespaces Chromium normally uses for its inner sandbox, so the launcher passes `--no-sandbox` to Chromium. Browser subprocesses share the browser user's guest privileges. The outer youki seccomp, capabilities, UID mapping, firewall, filesystem and cgroup policy apply to every process.
+
+The desktop and core share one resource budget. A new organism defaults to 768 MiB, 1,000 CPU millicores and 384 tasks. The organism profile records its original birth limits in `limits` and its effective configuration in `runtime_limits`. Lower explicit budgets can prevent Chromium from starting or trigger a cgroup OOM kill. Browser history, downloads and cookies consume the individual's existing disk quota and persist across explicit restarts. Existing prepared individuals keep their copied rootfs and init binary. New individuals use the updated template.
+
+The guest observer can receive a startup capture ticket followed by live-view tickets. The control plane stores the last accepted JPEG per organism and exposes it to the owner through `GET /api/v2/organisms/{id}/desktop/snapshot`, including after shutdown.
+
+PID 1 writes advisory desktop state to `/work/.survive-desktop-status.json`. The `state` values are `starting`, `ready`, `failed` and `exited`. The file includes the display, known desktop process IDs and any startup or exit error. Like the core status, this file belongs to the individual.
 
 ## Network and services contract
 
@@ -77,7 +97,7 @@ Owned host `inet survive_host` rules are scoped to `sv-uplink`; they never flush
 
 ## Lifecycle, failures and reboot
 
-Public API: `SandboxManager::new(config)`, `prepare(&spec)`, `start(id)`, `stop(id)`, `status(id)` and additional `doctor()`, `setup()`, `restore()`, `work_dir(id)`. Manager clones share configuration; operations run in blocking tasks under a cross-process flock. Cancellation does not abandon an in-progress privileged operation. Spec identity, limits and network policy are immutable after prepare; allocate a new identity for a changed spec. Repeated prepare with the same completed spec preserves all files.
+Public API: `SandboxManager::new(config)`, `prepare(&spec)`, `start(id)`, `stop(id)`, `status(id)` and additional `doctor()`, `setup()`, `restore()`, `work_dir(id)`. Manager clones share configuration; operations run in blocking tasks under a cross-process flock. Cancellation does not abandon an in-progress privileged operation. Routine prepare validates the identity, recorded limits and network policy against the existing spec. Repeated prepare with the same completed spec preserves all files. A targeted offline desktop upgrade records its effective quotas separately from the original birth traits.
 
 Prepare builds bounded storage, OCI configuration and firewall policy; it creates no agent namespace or veth. Start kills any old cgroup and removes its old veth and namespace pin, prepares and verifies the four runtime filesystem views, then runs `youki create`. It validates the paused init PID and isolated user/network namespaces, runs `ip netns attach sv-<slot> PID`, and wires the veth and guest routes while the router end stays DOWN. Only after `youki start` and strict namespace-inode/UID/cgroup/capability/seccomp verification does it raise the router end and install the agent route with `route replace`. Existing root-owned OCI configs are regenerated at start; mutable workspace files are preserved. Any start failure disconnects and kills the cgroup; filesystem changes are retained. Stop disconnects first, writes `cgroup.kill`, verifies the group is empty, deletes that runtime record and retires its veth/pin. A legitimately absent agent link is accepted only after a successful router link query; failed queries remain errors. If doctor/firewall is broken, emergency stop still attempts the cgroup kill. Depletion must call `stop`, not just signal the original core PID.
 
@@ -86,9 +106,9 @@ Prepare builds bounded storage, OCI configuration and firewall policy; it create
 PID 1 atomically updates `/work/.survive-init-status.json`:
 
 ```json
-{"state":"running","pid":2}
-{"state":"core_exited","pid":2,"exit_code":42,"signal":null}
-{"state":"core_exited","pid":2,"exit_code":null,"signal":11}
+{"state":"running","pid":150}
+{"state":"core_exited","pid":150,"exit_code":42,"signal":null}
+{"state":"core_exited","pid":150,"exit_code":null,"signal":11}
 {"state":"launch_failed","error":"..."}
 ```
 
@@ -113,7 +133,7 @@ sudo env SURVIVE_LINUX_TEST=YES \
   deploy/sandbox-linux-integration.sh /etc/survive/sandbox.toml
 ```
 
-The Linux test runs real youki processes, compiles/runs C and Rust, installs an offline Debian package, checks core-exit/recovery behavior, source IPs, peers, service source binding, denied destinations, forged source rejection, PID/memory/disk enforcement, persistent rootfs/work and mutable boot restart. It snapshots existing Docker rules and compares them afterward. Slots 60000..60003 must be free; four images plus four lower copies need available disk space and 1 GiB aggregate RAM (256 MiB per fixture). The public connectivity probe defaults to `1.1.1.1:443`; override `SURVIVE_PUBLIC_TEST_ADDR` if needed. Tests stop their individuals on success and retain all artifacts; failures also retain evidence, so stop the reported fixture identities explicitly after investigation. They do not run as part of ordinary cargo tests. Reboot restore additionally requires a real reboot drill on a fixture; the test rejects same-boot restore.
+The Linux test runs real youki processes, compiles/runs C and Rust, installs an offline Debian package, checks desktop readiness after core exit, recovery behavior, source IPs, peers, service source binding, denied destinations, forged source rejection, PID/memory/disk enforcement, persistent rootfs/work and mutable boot restart. It snapshots existing Docker rules and compares them afterward. Slots 60000..60003 must be free. Provision disk space for four images plus four lower copies and a 2 GiB memory pool for this four-individual fixture (512 MiB and 256 tasks each). The public connectivity probe defaults to `1.1.1.1:443`; override `SURVIVE_PUBLIC_TEST_ADDR` if needed. Tests stop their individuals on success and retain all artifacts; failures also retain evidence, so stop the reported fixture identities explicitly after investigation. They do not run as part of ordinary cargo tests. Reboot restore additionally requires a real reboot drill on a fixture; the test rejects same-boot restore.
 
 The Linux acceptance suite must pass on the target before release. Record separately whether a real host reboot drill was performed; do not reboot a shared production host as part of routine verification. Local macOS tests exercise validation, manifest behavior, generated isolation policy and fail-closed platform handling; they do not establish kernel isolation correctness.
 

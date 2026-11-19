@@ -26,7 +26,8 @@ The native contract tests send the form payloads through the core environment, b
 
 - **Overview** shows creator-owned environments, organism life status, clickable topology nodes and recent recorded events.
 - **Environments** lists immutable descriptions and current members. Create an empty environment with an optional editable example, then create organisms in independent batches.
-- **Organisms** opens life status, current DNA, events, energy ledger, files, reports with file snapshots, grant history and service previews. Send energy or extend lifetime directly, or associate a grant with a selected report.
+- **Organisms** opens life status, creator dialogue, read-only desktop, current DNA, events, energy ledger, files, reports, grant history and service previews. Open **桌面与对话** on a selected topology node or in its profile. The read-only desktop appears on the left and the conversation on the right. On narrow screens, the conversation appears below the desktop. The latest messages update while visible. **从头查看** pages through earlier records. Each message accepts up to 2,048 UTF-8 bytes. A stopped organism can receive a message in its inbox and read it after resuming. You can grant energy or extend lifetime from its profile.
+- The desktop panel requests live frames while the organism runs. When it stops, the viewer shows the most recent saved capture with its capture time when available. If a running desktop repeatedly returns no frame, the viewer also checks for a saved capture. Service previews, workspace files and reports remain accessible from the fallback view.
 - **Infrastructure** displays runtime readiness, public model prices, provider configuration and resource limits.
 - **API** links to the deployed usage guide and OpenAPI document.
 

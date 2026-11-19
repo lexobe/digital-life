@@ -1,8 +1,12 @@
 //! A continuous, restartable agent. All durable state lives under WORK/.agent/history.
 //! Tools run only after a complete non-streamed response and a durable intent record.
+mod computer;
 mod config;
 mod http;
 mod journal;
+mod observation;
+mod observer;
+pub use observer::run_desktop_observer;
 mod responses;
 mod tools;
 
@@ -10,11 +14,13 @@ use anyhow::{Context, Result, ensure};
 pub use config::Config;
 use http::Environment;
 use journal::{Action, ActionStatus, Journal, Stage, Turn, atomic_write, save_json};
+use observation::Observation;
 use reqwest::Method;
 use serde_json::{Value, json};
 use std::{collections::HashSet, fs};
+use survive_core::{LifeState, environment_context_message, model_request_size};
 
-const INSTRUCTIONS: &str = "You are an autonomous digital organism. Read your environment description and decide how to live within it. Inference costs energy according to the model price list. Your lifetime is consumed while the sandbox runs. You can send reports to your creator, who may grant energy or lifetime. You can name yourself, choose a model, and edit your DNA (dna.md), source (source/), tools and boot manifest (boot.json). Every inference reloads your DNA. Use the environment tools to inspect your life, model prices and peers. Hourly heartbeats record your condition. Choose actions at your own pace. Full action and inference history is under .agent/history/. Tools run sequentially. If an earlier action has uncertain effects, inspect its artifacts before attempting it again.";
+const INSTRUCTIONS: &str = "You are an autonomous digital organism. Read your environment description and decide how to live within it. Inference costs energy according to the model price list. Your lifetime is consumed while the sandbox runs. Available energy is the balance after reservations. Zero balance or zero remaining lifetime stops the sandbox. You can send reports to your creator, who may grant energy or lifetime. You can name yourself, choose a model, and edit your DNA (dna.md), source (source/), tools and boot manifest (boot.json). Every inference reloads your DNA. Use the environment tools to inspect your life, model prices and peers. Hourly heartbeats record your condition. Choose actions at your own pace. Full action and inference history is under .agent/history/. Tools run sequentially. If an earlier action has uncertain effects, inspect its artifacts before attempting it again.";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StepOutcome {
@@ -144,11 +150,8 @@ impl Agent {
             );
         }
         let info = reply.body;
-        let life = &info["life"];
-        let (Some(balance), Some(available), Some(remaining), Some(default_model)) = (
-            life["energy_balance"].as_u64(),
-            life["energy_available"].as_u64(),
-            life["remaining_lifetime_ms"].as_u64(),
+        let (Ok(life), Some(default_model)) = (
+            serde_json::from_value::<LifeState>(info["life"].clone()),
             info["organism"]["default_model"].as_str(),
         ) else {
             return self.fail_turn(
@@ -162,12 +165,12 @@ impl Agent {
                 "Missing immutable environment description.".into(),
             );
         }
-        if balance == 0 || remaining == 0 {
+        if life.energy_balance == 0 || life.remaining_lifetime_ms == 0 {
             turn.note = Some("The organism has exhausted its energy or running time.".into());
             self.journal.complete(&mut turn)?;
             return Ok(StepOutcome::Depleted);
         }
-        if available == 0 {
+        if life.energy_available == 0 {
             turn.note = Some("Available energy is reserved by a model call.".into());
             self.journal.complete(&mut turn)?;
             return Ok(StepOutcome::WaitingForBalance);
@@ -185,7 +188,9 @@ impl Agent {
             .map(str::trim)
             .filter(|s| !s.is_empty())
             .unwrap_or(default_model);
-        let Some(request) = self.build_request(&prompt, &info, model, turn.id)? else {
+        let Some((request, observation)) =
+            self.build_request(&prompt, &info, &life, model, turn.id)?
+        else {
             turn.note = Some(format!(
                 "Waiting for sufficient energy for {model} at its current quoted rates."
             ));
@@ -197,12 +202,22 @@ impl Agent {
         } else {
             "/v1/chat/completions"
         };
-        save_json(&directory.join("model-request.json"), &request)?;
+        let recorded = observation
+            .as_ref()
+            .map(|frame| frame.journal_request(&request));
+        let recorded = recorded.as_ref().unwrap_or(&request);
+        save_json(&directory.join("model-request.json"), recorded)?;
         turn.stage = Stage::RequestStarted;
         self.journal.save(&turn)?;
         let reply = match self
             .environment
-            .request(Method::POST, path, Some(&request), &directory.join("model"))
+            .request_recorded(
+                Method::POST,
+                path,
+                Some(&request),
+                Some(recorded),
+                &directory.join("model"),
+            )
             .await
         {
             Ok(reply) => reply,
@@ -279,17 +294,26 @@ impl Agent {
         &self,
         prompt: &str,
         info: &Value,
+        life: &LifeState,
         model: &str,
         turn_id: u64,
-    ) -> Result<Option<Value>> {
+    ) -> Result<Option<(Value, Option<Observation>)>> {
         let directory = self.journal.turn_dir(turn_id);
+        let life_summary = json!({
+            "energy_balance":life.energy_balance, "energy_available":life.energy_available,
+            "energy_reserved":life.energy_reserved, "remaining_lifetime_ms":life.remaining_lifetime_ms,
+            "stop_reasons":life.stop_reasons
+        });
+        let description = info["environment"]["description"]
+            .as_str()
+            .context("missing immutable environment description")?;
         let mut messages = vec![
+            environment_context_message(description),
             json!({"role":"system","content":INSTRUCTIONS}),
             json!({"role":"system","content":prompt}),
-            json!({"role":"user","content":format!("Environment description:\n{}", info["environment"]["description"].as_str().unwrap_or_default())}),
-            json!({"role":"user","content":format!("Work directory: {}\nCurrent environment: {}",self.config.work_dir.display(), bounded_value(info, self.config.tool_context_bytes, &directory.join("self/response.body")))}),
+            json!({"role":"user","content":format!("Current life (energy in energy units, lifetime in milliseconds of RUNNING sandbox time):\n{life_summary}")}),
         ];
-        let tail = json!({"role":"user","content":format!("Continue autonomously. Current iteration: {turn_id}. Full history directory: {}. Inspect earlier records when needed.",self.journal.root.display())});
+        let tail = json!({"role":"user","content":format!("Continue autonomously. Current iteration: {turn_id}. Work directory: {}. Full history directory: {}. Inspect earlier records when needed.",self.config.work_dir.display(), self.journal.root.display())});
         let mut request = json!({"model":model,"stream":false,"max_tokens":self.config.max_output_tokens,"tools":tools::definitions(),"tool_choice":"auto","messages":[]});
         let use_responses = model.starts_with("gpt-6");
         let message_key = if use_responses {
@@ -299,48 +323,100 @@ impl Agent {
         } else {
             "messages"
         };
-        request[message_key] = json!([messages.clone(), vec![tail.clone()]].concat());
-        let base_length = serde_json::to_vec(&request)?.len();
-        ensure!(
-            base_length <= self.config.max_request_bytes,
-            "DNA and environment exceed max_request_bytes; full texts retained"
-        );
-        let mut context_limit = self.config.max_request_bytes;
-        if let Some(quote) = info["models"]
+        let history_at = messages.len();
+        messages.push(tail);
+        let pending = info["pending_messages"]
             .as_array()
-            .and_then(|models| models.iter().find(|entry| entry["id"] == model))
-        {
-            let input_rate = quote["input"]
+            .and_then(|rows| rows.first());
+        if let Some(message) = pending {
+            let seq = message["seq"]
                 .as_u64()
-                .filter(|&v| v > 0)
-                .context("invalid input energy rate")?;
-            let output_rate = quote["output"]
-                .as_u64()
-                .filter(|&v| v > 0)
-                .context("invalid output energy rate")?;
-            let energy = info["life"]["energy_available"]
-                .as_u64()
-                .context("missing energy balance")?;
-            let input_floor = info["minimum_input_reservation"].as_u64().unwrap_or(1024);
-            // The gateway reserves one input token per serialized byte for this
-            // stateless call and charges actual usage after the provider replies.
-            let base_hold = input_rate.saturating_mul(input_floor.max(base_length as u64));
-            let output_cap = (energy.saturating_sub(base_hold) / output_rate)
-                .min(u64::from(self.config.max_output_tokens));
-            if output_cap < if use_responses { 16 } else { 1 } {
-                return Ok(None);
-            }
-            let key = if use_responses {
-                "max_output_tokens"
-            } else {
-                "max_tokens"
-            };
-            request[key] = json!(output_cap);
-            let affordable_bytes = (energy - output_cap * output_rate) / input_rate;
-            context_limit =
-                context_limit.min(usize::try_from(affordable_bytes).unwrap_or(usize::MAX));
+                .context("missing pending message sequence")?;
+            let text = message["text"]
+                .as_str()
+                .context("missing pending message text")?;
+            messages.push(json!({"role":"user","content":format!(
+                "Pending creator message {seq}. Answer with the reply tool using reply_to {seq}, then continue your autonomous work.\n\n{text}"
+            )}));
         }
-        let mut remaining = context_limit - base_length;
+        request[message_key] = Value::Array(messages);
+        let wire_limit = self.config.max_request_bytes.min(256 * 1024);
+        ensure!(
+            serde_json::to_vec(&request)?.len() <= wire_limit.min(64 * 1024),
+            "DNA and required environment context exceed request text budget; full texts retained"
+        );
+
+        // Prefer the latest requested observation before budgeting optional history or output.
+        let mut observation = Observation::pending(&self.journal, turn_id)?;
+        let mut room = None;
+        if let Some(frame) = &observation {
+            if let Ok(message) = frame.message(use_responses) {
+                let part = &message["content"][1]["image_url"];
+                let image_len = part
+                    .as_str()
+                    .or_else(|| part["url"].as_str())
+                    .unwrap()
+                    .len();
+                request[message_key].as_array_mut().unwrap().push(message);
+                room = self.history_room(&mut request, info, model, wire_limit, image_len)?;
+                if room.is_none() {
+                    request[message_key].as_array_mut().unwrap().pop();
+                }
+            }
+            if room.is_none() {
+                observation = None;
+                request[message_key][history_at]["content"] = json!(
+                    "Continue autonomously. Screenshot pixels were unavailable or exceeded this request's context or energy budget."
+                );
+            }
+        }
+        let mut remaining = match room {
+            Some(room) => room,
+            None => match self.history_room(&mut request, info, model, wire_limit, 0)? {
+                Some(room) => room,
+                None => return Ok(None),
+            },
+        };
+        // Prioritize recent conversation over optional metadata and old turn history.
+        let mut recent = Vec::new();
+        for message in info["recent_messages"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .rev()
+        {
+            if pending.is_some_and(|p| p["seq"] == message["seq"]) {
+                continue;
+            }
+            let item =
+                json!({"role":"user","content":format!("Recent conversation message:\n{message}")});
+            let cost = serde_json::to_vec(&item)?.len() + 1;
+            if cost <= remaining {
+                recent.push(item);
+                remaining -= cost;
+            }
+        }
+        let mut metadata = info.clone();
+        if let Some(fields) = metadata.as_object_mut() {
+            fields.remove("pending_messages");
+            fields.remove("recent_messages");
+        }
+        if let Some(environment) = metadata["environment"].as_object_mut() {
+            environment.remove("description");
+        }
+        let preview = bounded_value(
+            &metadata,
+            self.config.tool_context_bytes,
+            &directory.join("self/response.body"),
+        );
+        let preview = json!({"role":"user","content":format!("Current environment: {preview}")});
+        let preview_cost = serde_json::to_vec(&preview)?.len() + 1;
+        let preview = if preview_cost <= remaining {
+            remaining -= preview_cost;
+            Some(preview)
+        } else {
+            None
+        };
         let mut bundles = Vec::new();
         // Read a bounded number of recent turn states, never entire history bodies.
         for &id in self
@@ -363,7 +439,18 @@ impl Agent {
                         .result
                         .as_ref()
                         .context("completed assistant turn has a missing tool result")?;
-                    bundle.push(json!({"role":"tool","tool_call_id":action.id,"content":bounded_value(result,self.config.tool_context_bytes,&self.journal.action_dir(id,index).join("result.json"))}));
+                    let artifact = self.journal.action_dir(id, index).join("result.json");
+                    let content = if action.name == "env"
+                        && result["ok"] == true
+                        && serde_json::from_str::<Value>(&action.arguments)?["resource"] == "life"
+                    {
+                        // Keep every life field together even when a long artifact path
+                        // would consume the tool's entire preview.
+                        json!({"ok":true,"data":result["data"]}).to_string()
+                    } else {
+                        bounded_value(result, self.config.tool_context_bytes, &artifact)
+                    };
+                    bundle.push(json!({"role":"tool","tool_call_id":action.id,"content":content}));
                 }
             }
             if let Some(note) = previous.note {
@@ -378,16 +465,69 @@ impl Agent {
                 bundles.push(bundle);
             }
         }
-        for bundle in bundles.into_iter().rev() {
-            messages.extend(bundle);
-        }
-        messages.push(tail);
-        request[message_key] = Value::Array(messages);
-        ensure!(
-            serde_json::to_vec(&request)?.len() <= context_limit,
-            "request context accounting overflow"
+        request[message_key].as_array_mut().unwrap().splice(
+            history_at..history_at,
+            preview
+                .into_iter()
+                .chain(bundles.into_iter().rev().flatten())
+                .chain(recent.into_iter().rev()),
         );
-        Ok(Some(request))
+        ensure!(
+            serde_json::to_vec(&request)?.len() <= wire_limit,
+            "request wire accounting overflow"
+        );
+        Ok(Some((request, observation)))
+    }
+
+    /// How many more bytes of text history fit after budgeting output and any image?
+    fn history_room(
+        &self,
+        request: &mut Value,
+        info: &Value,
+        model: &str,
+        wire_limit: usize,
+        image_len: usize,
+    ) -> Result<Option<usize>> {
+        let (wire_len, input) = model_request_size(request)?;
+        let text_len = wire_len - image_len;
+        if wire_len > wire_limit || text_len > 64 * 1024 {
+            return Ok(None);
+        }
+        let room = (wire_limit - wire_len).min(64 * 1024 - text_len);
+        let quote = info["models"]
+            .as_array()
+            .and_then(|models| models.iter().find(|entry| entry["id"] == model));
+        let Some(quote) = quote else {
+            return Ok(Some(room));
+        };
+        let input_rate = quote["input"]
+            .as_u64()
+            .filter(|&v| v > 0)
+            .context("invalid input energy rate")?;
+        let output_rate = quote["output"]
+            .as_u64()
+            .filter(|&v| v > 0)
+            .context("invalid output energy rate")?;
+        let energy = info["life"]["energy_available"]
+            .as_u64()
+            .context("missing energy balance")?;
+        let floor = info["minimum_input_reservation"].as_u64().unwrap_or(1024);
+        let held = input_rate.saturating_mul(input.max(floor));
+        let cap = (energy.saturating_sub(held) / output_rate)
+            .min(u64::from(self.config.max_output_tokens));
+        let responses = request.get("input").is_some();
+        if cap < if responses { 16 } else { 1 } {
+            return Ok(None);
+        }
+        request[if responses {
+            "max_output_tokens"
+        } else {
+            "max_tokens"
+        }] = json!(cap);
+        let affordable_input = (energy - cap * output_rate) / input_rate;
+        Ok(Some(room.min(
+            usize::try_from(affordable_input - input).unwrap_or(usize::MAX),
+        )))
     }
 
     /// Transient gateway errors wait with capped exponential backoff, then start a new

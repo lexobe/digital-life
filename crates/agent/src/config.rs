@@ -27,7 +27,7 @@ impl Config {
             env_url: env_url.into(),
             token: token.into(),
             work_dir,
-            max_request_bytes: 64 * 1024,
+            max_request_bytes: 256 * 1024,
             max_response_bytes: 8 * 1024 * 1024,
             tool_context_bytes: 4096,
             max_output_tokens: 4096,

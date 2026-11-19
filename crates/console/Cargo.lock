@@ -738,6 +738,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "imagesize"
+version = "0.15.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "65b27460c2c92b037f3f94c538ed9a3342f3fdf923606781629ccb35f82d042a"
+
+[[package]]
 name = "implicit-clone"
 version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1458,11 +1464,14 @@ name = "survive-console"
 version = "0.2.0"
 dependencies = [
  "base64",
+ "gloo-events",
+ "gloo-file",
  "gloo-net 0.7.0",
  "gloo-timers",
  "js-sys",
  "kuchiki",
  "regex",
+ "serde",
  "serde_json",
  "survive-core",
  "tempfile",
@@ -1478,7 +1487,9 @@ name = "survive-core"
 version = "0.2.0"
 dependencies = [
  "anyhow",
+ "base64",
  "hex",
+ "imagesize",
  "libc",
  "redb",
  "serde",
